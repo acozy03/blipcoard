@@ -34,7 +34,7 @@ impl BlipStore {
     fn initialize(&self) -> Result<(), BlipError> {
         self.conn.execute_batch(include_str!("sql/schema.sql"))?;
 
-        self.create_workspace_if_missing(&NewWorkspace {
+        let inbox_created = self.create_workspace_if_missing(&NewWorkspace {
             name: INBOX_WORKSPACE.to_owned(),
             description: Some("Default capture workspace".to_owned()),
             color: Some("#777777".to_owned()),
@@ -47,20 +47,32 @@ impl BlipStore {
             self.ensure_active_workspace(INBOX_WORKSPACE)?;
         }
 
-        self.insert_audit_event(
-            ActorType::System,
-            None,
-            AuditEventType::SchemaInitialized,
-            None,
-            Some(INBOX_WORKSPACE.to_owned()),
-            Some("{\"version\":1}".to_owned()),
+        let schema_initialized = self.conn.execute(
+            "INSERT OR IGNORE INTO app_state(key, value) VALUES('schema_version', '1')",
+            [],
         )?;
+
+        if schema_initialized > 0 || inbox_created {
+            self.insert_audit_event(
+                ActorType::System,
+                None,
+                AuditEventType::SchemaInitialized,
+                None,
+                Some(INBOX_WORKSPACE.to_owned()),
+                Some("{\"version\":1}".to_owned()),
+            )?;
+        }
 
         Ok(())
     }
 
     pub fn create_workspace(&self, workspace: &NewWorkspace) -> Result<Workspace, BlipError> {
-        self.create_workspace_if_missing(workspace)?;
+        if self.get_workspace(&workspace.name)?.is_some() {
+            return Err(BlipError::WorkspaceAlreadyExists(workspace.name.clone()));
+        }
+
+        self.insert_workspace(workspace, false)?;
+
         self.get_workspace(&workspace.name)?
             .ok_or_else(|| BlipError::WorkspaceNotFound(workspace.name.clone()))
     }
@@ -211,11 +223,27 @@ impl BlipStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(BlipError::from)
     }
 
-    fn create_workspace_if_missing(&self, workspace: &NewWorkspace) -> Result<(), BlipError> {
-        let affected_rows = self.conn.execute(
+    fn create_workspace_if_missing(&self, workspace: &NewWorkspace) -> Result<bool, BlipError> {
+        self.insert_workspace(workspace, true)
+    }
+
+    fn insert_workspace(
+        &self,
+        workspace: &NewWorkspace,
+        ignore_if_exists: bool,
+    ) -> Result<bool, BlipError> {
+        let statement = if ignore_if_exists {
             "INSERT OR IGNORE INTO workspaces (
                 name, description, color, agent_access, sticky_capture, retention_days, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        } else {
+            "INSERT INTO workspaces (
+                name, description, color, agent_access, sticky_capture, retention_days, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        };
+
+        let affected_rows = self.conn.execute(
+            statement,
             params![
                 workspace.name,
                 workspace.description,
@@ -238,7 +266,7 @@ impl BlipStore {
             )?;
         }
 
-        Ok(())
+        Ok(affected_rows > 0)
     }
 
     fn ensure_active_workspace(&self, workspace_name: &str) -> Result<(), BlipError> {
@@ -335,6 +363,13 @@ mod tests {
 
         let workspaces = store.list_workspaces().expect("list should work");
         assert!(workspaces.iter().any(|ws| ws.name == "inbox"));
+
+        let audit_events = store.list_audit_events().expect("audit list should work");
+        let schema_init_count = audit_events
+            .iter()
+            .filter(|event| event.event_type == AuditEventType::SchemaInitialized)
+            .count();
+        assert_eq!(schema_init_count, 1);
     }
 
     #[test]
@@ -369,5 +404,28 @@ mod tests {
         let blips = store.list_blips("auth-bug").expect("list should work");
         assert_eq!(blips.len(), 1);
         assert_eq!(blips[0].id, blip.id);
+    }
+
+    #[test]
+    fn duplicate_workspace_creation_returns_error() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let workspace = NewWorkspace {
+            name: "demo".into(),
+            description: Some("First".into()),
+            color: Some("#ff0000".into()),
+            agent_access: false,
+            sticky_capture: false,
+            retention_days: None,
+        };
+
+        store
+            .create_workspace(&workspace)
+            .expect("first create should succeed");
+
+        let error = store
+            .create_workspace(&workspace)
+            .expect_err("second create should fail");
+
+        assert!(matches!(error, BlipError::WorkspaceAlreadyExists(name) if name == "demo"));
     }
 }

@@ -1,5 +1,5 @@
 use blip_config::BlipConfig;
-use blip_core::{BlipStore, ContentType, NewBlip, NewWorkspace};
+use blip_core::{BlipError, BlipStore, ContentType, NewBlip, NewWorkspace};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -24,7 +24,7 @@ enum Commands {
         description: Option<String>,
         #[arg(long)]
         color: Option<String>,
-        #[arg(long, default_value_t = true)]
+        #[arg(long)]
         agent_access: bool,
     },
     Use {
@@ -76,14 +76,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             color,
             agent_access,
         } => {
-            let workspace = store.create_workspace(&NewWorkspace {
+            let workspace = match store.create_workspace(&NewWorkspace {
                 name,
                 description,
                 color,
                 agent_access,
                 sticky_capture: false,
                 retention_days: None,
-            })?;
+            }) {
+                Ok(workspace) => workspace,
+                Err(BlipError::WorkspaceAlreadyExists(name)) => {
+                    return Err(format!("workspace `{name}` already exists").into());
+                }
+                Err(error) => return Err(error.into()),
+            };
             println!("created workspace {}", workspace.name);
         }
         Commands::Use { workspace } => {

@@ -3,6 +3,7 @@ name = "blip-daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 blip-api = { path = "../blip-api" }
@@ -10,3 +11,6 @@ blip-config = { path = "../blip-config" }
 blip-core = { path = "../blip-core" }
 chrono.workspace = true
 serde_json.workspace = true
+
+[lints]
+workspace = true

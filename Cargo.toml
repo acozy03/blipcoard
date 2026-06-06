@@ -12,8 +12,15 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 license = "MIT"
+rust-version = "1.85"
 version = "0.1.0"
 authors = ["Adrian Cosentino"]
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
 
 [workspace.dependencies]
 chrono = { version = "0.4.42", features = ["serde"] }

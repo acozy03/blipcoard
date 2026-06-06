@@ -120,6 +120,7 @@ dependencies = [
  "blip-core",
  "clap",
  "predicates",
+ "rusqlite",
  "tempfile",
 ]
 
