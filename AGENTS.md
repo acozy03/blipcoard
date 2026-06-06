@@ -81,4 +81,6 @@ Use the `gh` CLI as part of normal task management:
   and current status instead of leaving new tasks uncategorized
 - set the project Iteration field for new tasks because the Blipcoard board is
   filtered by iteration
+- set task Priority by engineering judgment based on user impact, dependency
+  order, risk, and urgency; do not default every task to the same priority
 - keep phase and deliverable issues aligned with `docs/mvp-phases.md`
