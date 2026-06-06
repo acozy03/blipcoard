@@ -64,6 +64,13 @@ CLI client responsible for:
 
 The CLI should be a client of `blipd`, not a separate clipboard manager.
 
+Bootstrap note:
+
+- in phase 1, the CLI is allowed to talk to `blip-core` storage directly so the
+  workspace and audit model can be exercised before the daemon API exists
+- phase 2 should replace direct store access with daemon-mediated operations for
+  clipboard ingestion and shared runtime behavior
+
 ### 3. Desktop app
 
 Desktop UI responsible for:
@@ -176,6 +183,16 @@ Optional policy features:
 5. User routes the `blip` into a workspace manually or via sticky mode.
 6. CLI or desktop sets active workspace.
 7. Agent tools query only that workspace.
+
+Phase 1 bootstrap flow:
+
+1. User runs the CLI locally.
+2. CLI opens the same local SQLite store as `blipd`.
+3. User creates workspaces, selects an active workspace, and inserts demo blips.
+4. Audit events are written directly by the store layer.
+
+This bootstrap path exists only to validate the storage and domain model before
+phase 2 introduces the real daemon ingestion boundary.
 
 ## Core Domain Objects
 

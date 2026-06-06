@@ -36,11 +36,21 @@ blipcoard/
 - policy enforcement
 - local API server
 
+Current state:
+
+- bootstrap binary exists
+- phase 2 should add the long-running runtime loop and client boundary
+
 ### `blip-cli`
 
 - terminal UX
 - JSON output
 - human table output
+
+Current state:
+
+- bootstrap commands talk directly to `blip-core`
+- this is temporary until phase 2 establishes the daemon/API path
 
 ### `blip-api`
 

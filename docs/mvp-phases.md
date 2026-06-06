@@ -1,71 +1,76 @@
 # MVP Phases
 
-This is the implementation order that minimizes risk.
+This is the implementation order that matches the current repository state on
+`develop`.
 
-## MVP-0: Repository and crate layout
+## Phase 1: Foundation baseline
 
-Create:
+Status:
 
-- `crates/blip-core`
-- `crates/blip-daemon`
-- `crates/blip-cli`
-- `apps/desktop`
+- merged
 
-Do not implement UI first.
+Included deliverables:
 
-## MVP-1: Local store
-
-Must have:
-
-- SQLite DB
-- `blips` table
-- `workspaces` table
-- `audit_events` table
+- repository and workspace layout for the runtime crates
+- SQLite schema for `workspaces`, `blips`, `audit_events`, and app state
+- `blip-core` domain and storage APIs
+- default `inbox` workspace and active workspace state
+- bootstrap CLI commands for workspace and demo blip management
+- bootstrap daemon binary and shared API/config crates
+- CI baseline for format, lint, test, build, and PR title checks
 
 Success condition:
 
-- can insert and query blips without clipboard watching
+- the local store, audit trail, and active workspace model are usable and tested
+  before clipboard watching exists
 
-## MVP-2: Clipboard ingestion
+## Phase 2: Daemon and clipboard ingestion
+
+Status:
+
+- next
 
 Must have:
 
-- daemon process
-- clipboard watcher or polling abstraction
-- `inbox` ingestion
+- `blipd` as the runtime owner for ingestion behavior
+- clipboard watcher or polling abstraction behind `blip-clipboard`
+- automatic ingestion into `inbox`
+- dedupe policy for repeated copies
+- shared local API or IPC boundary for daemon clients
 
 Success condition:
 
-- copying text creates persisted blips automatically
+- copying text creates persisted blips automatically through the daemon path
 
-## MVP-3: Basic CLI
+## Phase 3: CLI as a daemon client
 
 Must have:
 
-- `blip inbox`
-- `blip workspaces`
-- `blip create <name>`
-- `blip send <workspace>`
-- `blip use <workspace>`
-- `blip list <workspace>`
+- `blip` commands wired through the daemon boundary
+- inbox and workspace listing
+- active workspace selection
+- routing commands for user-controlled organization
+- shell-friendly output modes
 
 Success condition:
 
-- a user can manage multiple task buckets from terminal only
+- the CLI is useful without bypassing daemon policy or runtime behavior
 
-## MVP-4: Active workspace scoping
+## Phase 4: Active workspace scoping and agent access
 
 Must have:
 
-- active workspace state
 - agent-safe scoped read commands
 - no default access to `inbox`
+- explicit policy checks around readable workspaces
+- read-side audit events
 
 Success condition:
 
-- an agent can read only the chosen workspace
+- an agent can read only the chosen workspace unless the user opts into broader
+  access
 
-## MVP-5: Desktop app
+## Phase 5: Desktop app
 
 Must have:
 
@@ -73,24 +78,26 @@ Must have:
 - workspace view
 - active workspace badge
 - detail panel
+- audit visibility
 
 Success condition:
 
-- user can inspect and route blips visually
+- users can inspect and route blips visually with the same runtime boundary as
+  the CLI
 
-## MVP-6: Fast routing
+## Phase 6: Fast routing
 
 Must have:
 
 - global shortcuts
 - sticky workspace mode
-- quick workspace send action for latest blip
+- quick workspace send actions
 
 Success condition:
 
-- multitasking between 3-5 active workstreams feels practical
+- multitasking between several active workstreams feels practical
 
-## MVP-7: Redaction and search polish
+## Phase 7: Redaction and search polish
 
 Must have:
 
@@ -102,17 +109,3 @@ Must have:
 Success condition:
 
 - blips are searchable, safer, and useful as agent context bundles
-
-## MVP-8: CI baseline
-
-Must have:
-
-- GitHub Actions workflow
-- `cargo fmt --check`
-- `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --workspace`
-- `cargo build --workspace`
-
-Success condition:
-
-- every PR into `develop` or `main` gets the Rust baseline checks automatically

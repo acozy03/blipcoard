@@ -3,7 +3,10 @@ use crate::domain::{
 };
 use crate::error::BlipError;
 use chrono::{DateTime, Utc};
+use rusqlite::ErrorCode;
+use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, params};
+use std::io;
 use uuid::Uuid;
 
 const INBOX_WORKSPACE: &str = "inbox";
@@ -34,7 +37,7 @@ impl BlipStore {
     fn initialize(&self) -> Result<(), BlipError> {
         self.conn.execute_batch(include_str!("sql/schema.sql"))?;
 
-        let inbox_created = self.create_workspace_if_missing(&NewWorkspace {
+        self.create_workspace_if_missing(&NewWorkspace {
             name: INBOX_WORKSPACE.to_owned(),
             description: Some("Default capture workspace".to_owned()),
             color: Some("#777777".to_owned()),
@@ -52,7 +55,7 @@ impl BlipStore {
             [],
         )?;
 
-        if schema_initialized > 0 || inbox_created {
+        if schema_initialized > 0 {
             self.insert_audit_event(
                 ActorType::System,
                 None,
@@ -67,11 +70,13 @@ impl BlipStore {
     }
 
     pub fn create_workspace(&self, workspace: &NewWorkspace) -> Result<Workspace, BlipError> {
-        if self.get_workspace(&workspace.name)?.is_some() {
-            return Err(BlipError::WorkspaceAlreadyExists(workspace.name.clone()));
-        }
+        if let Err(error) = self.insert_workspace(workspace, false) {
+            if is_unique_constraint(&error) {
+                return Err(BlipError::WorkspaceAlreadyExists(workspace.name.clone()));
+            }
 
-        self.insert_workspace(workspace, false)?;
+            return Err(error);
+        }
 
         self.get_workspace(&workspace.name)?
             .ok_or_else(|| BlipError::WorkspaceNotFound(workspace.name.clone()))
@@ -315,9 +320,9 @@ impl BlipStore {
         let rows = stmt.query_map([], |row| {
             Ok(AuditEvent {
                 id: row.get(0)?,
-                actor_type: ActorType::parse(row.get::<_, String>(1)?.as_str()),
+                actor_type: parse_actor_type(&row.get::<_, String>(1)?)?,
                 actor_id: row.get(2)?,
-                event_type: AuditEventType::parse(row.get::<_, String>(3)?.as_str()),
+                event_type: parse_audit_event_type(&row.get::<_, String>(3)?)?,
                 target_blip_id: row.get(4)?,
                 target_workspace: row.get(5)?,
                 details_json: row.get(6)?,
@@ -331,7 +336,8 @@ impl BlipStore {
 
 fn map_blip_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Blip> {
     let tags_json: String = row.get(9)?;
-    let tags = serde_json::from_str(&tags_json).unwrap_or_default();
+    let tags = serde_json::from_str(&tags_json)
+        .map_err(|error| conversion_error(9, format!("invalid tags_json payload: {error}")))?;
 
     Ok(Blip {
         id: row.get(0)?,
@@ -346,6 +352,48 @@ fn map_blip_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Blip> {
         tags,
         created_at: row.get::<_, DateTime<Utc>>(10)?,
     })
+}
+
+fn parse_actor_type(value: &str) -> rusqlite::Result<ActorType> {
+    match value {
+        "system" => Ok(ActorType::System),
+        "user" => Ok(ActorType::User),
+        "agent" => Ok(ActorType::Agent),
+        _ => Err(conversion_error(
+            1,
+            format!("invalid actor_type value `{value}`"),
+        )),
+    }
+}
+
+fn parse_audit_event_type(value: &str) -> rusqlite::Result<AuditEventType> {
+    match value {
+        "schema_initialized" => Ok(AuditEventType::SchemaInitialized),
+        "workspace_created" => Ok(AuditEventType::WorkspaceCreated),
+        "workspace_activated" => Ok(AuditEventType::WorkspaceActivated),
+        "blip_ingested" => Ok(AuditEventType::BlipIngested),
+        "blip_moved" => Ok(AuditEventType::BlipMoved),
+        _ => Err(conversion_error(
+            3,
+            format!("invalid event_type value `{value}`"),
+        )),
+    }
+}
+
+fn conversion_error(column: usize, message: String) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        column,
+        Type::Text,
+        Box::new(io::Error::new(io::ErrorKind::InvalidData, message)),
+    )
+}
+
+fn is_unique_constraint(error: &BlipError) -> bool {
+    matches!(
+        error,
+        BlipError::Database(rusqlite::Error::SqliteFailure(failure, _))
+            if failure.code == ErrorCode::ConstraintViolation
+    )
 }
 
 #[cfg(test)]
@@ -427,5 +475,85 @@ mod tests {
             .expect_err("second create should fail");
 
         assert!(matches!(error, BlipError::WorkspaceAlreadyExists(name) if name == "demo"));
+    }
+
+    #[test]
+    fn invalid_tags_json_returns_an_error() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .connection()
+            .execute(
+                "INSERT INTO blips (
+                    id, workspace_name, source_app, content_type, language, content, size_bytes,
+                    token_estimate, is_redacted, tags_json, created_at
+                 ) VALUES (?1, 'inbox', NULL, 'plain_text', NULL, 'payload', 7, NULL, 0, ?2, ?3)",
+                params!["bad-tags", "{not-json", Utc::now()],
+            )
+            .expect("seed insert should succeed");
+
+        let error = store
+            .get_blip("bad-tags")
+            .expect_err("invalid tags should fail to decode");
+
+        assert!(matches!(
+            error,
+            BlipError::Database(rusqlite::Error::FromSqlConversionFailure(_, _, _))
+        ));
+    }
+
+    #[test]
+    fn invalid_audit_event_type_returns_an_error() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .connection()
+            .execute(
+                "INSERT INTO audit_events (
+                    id, actor_type, actor_id, event_type, target_blip_id, target_workspace, details_json, created_at
+                 ) VALUES (?1, 'system', NULL, 'unexpected_event', NULL, 'inbox', NULL, ?2)",
+                params!["bad-audit", Utc::now()],
+            )
+            .expect("seed insert should succeed");
+
+        let error = store
+            .list_audit_events()
+            .expect_err("invalid audit enums should fail to decode");
+
+        assert!(matches!(
+            error,
+            BlipError::Database(rusqlite::Error::FromSqlConversionFailure(_, _, _))
+        ));
+    }
+
+    #[test]
+    fn missing_inbox_backfill_does_not_emit_schema_initialized_again() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let schema_init_before = store
+            .list_audit_events()
+            .expect("audit list should work")
+            .into_iter()
+            .filter(|event| event.event_type == AuditEventType::SchemaInitialized)
+            .count();
+
+        store
+            .connection()
+            .execute("DELETE FROM workspaces WHERE name = 'inbox'", [])
+            .expect("inbox delete should succeed");
+
+        store.initialize().expect("reinitialize should succeed");
+
+        let audit_events = store.list_audit_events().expect("audit list should work");
+        let schema_init_after = audit_events
+            .iter()
+            .filter(|event| event.event_type == AuditEventType::SchemaInitialized)
+            .count();
+        let inbox_created_count = audit_events
+            .iter()
+            .filter(|event| event.event_type == AuditEventType::WorkspaceCreated)
+            .filter(|event| event.target_workspace.as_deref() == Some("inbox"))
+            .count();
+
+        assert_eq!(schema_init_before, 1);
+        assert_eq!(schema_init_after, 1);
+        assert_eq!(inbox_created_count, 1);
     }
 }
