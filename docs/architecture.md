@@ -77,6 +77,16 @@ Desktop UI responsible for:
 
 The desktop app should use the same daemon API as the CLI.
 
+## Branching Model
+
+The repository should use:
+
+- `develop` as the default integration and staging branch
+- `main` as the production/release branch
+- short-lived feature branches targeting `develop`
+
+All ordinary implementation PRs should target `develop` first.
+
 ## Recommended Tech Stack
 
 - systems/core: Rust
@@ -100,6 +110,42 @@ The hardest portability problem is clipboard observation, not storage or routing
 
 The architecture should isolate platform-specific clipboard watching behind one
 crate so the rest of the system remains platform-agnostic.
+
+All supported platforms should remain in the same repository.
+
+This project should not split macOS, Linux, and Windows into separate repos.
+Only the clipboard and OS integration layer should diverge by platform.
+
+## Packaging Model
+
+`blipcoard` should be treated as one runtime system with multiple entry points,
+not as three separate products.
+
+Required runtime components:
+
+- `blipd`
+- `blip`
+
+Optional GUI surface:
+
+- `blipcoard` desktop app
+
+Supported install modes:
+
+1. Full install
+   - daemon
+   - CLI
+   - desktop app
+2. CLI-only install
+   - daemon
+   - CLI
+
+Unsupported install mode:
+
+- desktop-only install
+
+The desktop application should never be treated as a standalone product.
+Any supported desktop distribution should also include the daemon and CLI.
 
 ## Security Model
 
@@ -212,3 +258,14 @@ Visual management layer:
 - audit panel
 - settings and hotkeys
 
+## CI Expectations
+
+Every PR targeting `develop` or `main` should run at minimum:
+
+- `cargo fmt --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --workspace`
+
+This is the Rust equivalent of formatting, linting, type-checking pressure, tests,
+and build verification on every change.

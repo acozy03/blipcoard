@@ -64,3 +64,16 @@ blipcoard/
 - React frontend
 - workspace, inbox, audit, and settings screens
 
+## Branch / Release Flow
+
+- `develop`: default branch for integration and staging
+- `main`: production branch
+- feature branches open PRs into `develop`
+
+## CI Location
+
+GitHub Actions workflows should live in:
+
+```text
+.github/workflows/
+```

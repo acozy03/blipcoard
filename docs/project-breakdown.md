@@ -168,7 +168,29 @@ Goal:
 
 Deliverables:
 
+- runtime-first distribution model
 - desktop bundles for macOS, Linux, Windows
 - daemon install/start behavior
 - CLI install docs
 - upgrade strategy
+
+Packaging rule:
+
+- desktop bundles must include daemon + CLI
+- CLI-only installs are supported
+- desktop-only installs are not supported
+
+## Part 10: CI / CD
+
+Goal:
+
+- make every PR prove the Rust workspace is healthy before merge
+
+Deliverables:
+
+- GitHub Actions workflow
+- formatting checks
+- clippy lint checks
+- workspace tests
+- workspace build verification
+- PR targeting `develop` and `main`

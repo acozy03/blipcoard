@@ -1,0 +1,10 @@
+[package]
+name = "blip-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+blip-config = { path = "../blip-config" }
+blip-core = { path = "../blip-core" }
+clap.workspace = true

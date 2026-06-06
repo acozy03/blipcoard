@@ -103,3 +103,16 @@ Success condition:
 
 - blips are searchable, safer, and useful as agent context bundles
 
+## MVP-8: CI baseline
+
+Must have:
+
+- GitHub Actions workflow
+- `cargo fmt --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --workspace`
+
+Success condition:
+
+- every PR into `develop` or `main` gets the Rust baseline checks automatically
