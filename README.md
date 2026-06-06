@@ -15,6 +15,24 @@ Core product surfaces:
 Start with the design docs in [docs/architecture.md](./docs/architecture.md) and
 [docs/project-breakdown.md](./docs/project-breakdown.md).
 
+## Current Status
+
+Phase 1 is merged on `develop`.
+
+Today the workspace includes:
+
+- `blip-core`: SQLite-backed domain and storage layer
+- `blip-config`: local config discovery and persistence
+- `blip-clipboard`: platform detection and watcher placeholders
+- `blip-api`: shared API models
+- `blip-cli`: bootstrap CLI for workspace and blip management
+- `blip-daemon`: bootstrap daemon binary with health-style output
+- GitHub Actions for format, lint, test, and build checks
+
+Phase 2 is the next implementation target. Its focus is turning `blipd` into the
+runtime owner for clipboard ingestion and establishing the local daemon/API path
+that the CLI and future desktop app will consume.
+
 ## Tooling
 
 Install the repo-local commitlint tooling and enable the checked-in git hooks:

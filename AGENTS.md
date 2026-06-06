@@ -58,3 +58,29 @@ When making Rust changes here:
 - keep platform-specific behavior isolated from shared core logic
 - avoid `unwrap()` in library code unless the invariant is explicit and local
 - add tests for storage, routing, and CLI behavior when behavior changes
+
+## GitHub Issue Workflow
+
+Use the `gh` CLI as part of normal task management:
+
+- inspect open issues before starting work with `gh issue list` and `gh issue view`
+- use the Blipcoard GitHub Project as the planning board:
+  `https://github.com/users/acozy03/projects/2`
+- inspect project fields before creating or moving work with
+  `gh project view 2 --owner acozy03` and
+  `gh project field-list 2 --owner acozy03`
+- add new phase, feature, and follow-up issues to the Blipcoard project
+- assign issue ownership when creating or moving tasks; default owner is
+  `@acozy03` unless the user says otherwise
+- reference the relevant issue number in branch names, commits, PRs, and status
+  updates when one exists
+- update project status after completing work or moving a task forward
+- create focused sub-issues or follow-up issues when a task reveals new scoped
+  work that should be tracked separately
+- apply the repo labels and project fields/tags that match the work type, phase,
+  and current status instead of leaving new tasks uncategorized
+- set the project Iteration field for new tasks because the Blipcoard board is
+  filtered by iteration
+- set task Priority by engineering judgment based on user impact, dependency
+  order, risk, and urgency; do not default every task to the same priority
+- keep phase and deliverable issues aligned with `docs/mvp-phases.md`

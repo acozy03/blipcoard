@@ -25,6 +25,7 @@ blipcoard/
 
 - domain types
 - workspace logic
+- SQLite migrations and store invariants
 - bundle generation
 - classification interfaces
 
@@ -36,11 +37,22 @@ blipcoard/
 - policy enforcement
 - local API server
 
+Current state:
+
+- bootstrap binary exists
+- phase 2 should add the long-running runtime loop and client boundary
+
 ### `blip-cli`
 
 - terminal UX
 - JSON output
 - human table output
+- bootstrap/admin store commands until daemon APIs are available
+
+Current state:
+
+- bootstrap commands talk directly to `blip-core`
+- this is temporary until phase 2 establishes the daemon/API path
 
 ### `blip-api`
 
@@ -49,6 +61,7 @@ blipcoard/
 ### `blip-clipboard`
 
 - platform abstraction for clipboard access and clipboard watching
+- no storage or policy ownership
 
 ### `blip-config`
 

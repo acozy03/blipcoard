@@ -5,7 +5,7 @@ use chrono::Utc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = BlipConfig::load_or_create()?;
-    let store = BlipStore::open(config.database_path.to_string_lossy().as_ref())?;
+    let store = BlipStore::open(&config.database_path)?;
     let active_workspace = store.get_active_workspace()?;
 
     let response = HealthResponse {

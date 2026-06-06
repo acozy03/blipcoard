@@ -1,88 +1,116 @@
 # Project Breakdown
 
-This project should be built in parts so the clipboard ingestion model stabilizes
-before UI polish or advanced agent integration is attempted.
+This project should still be built in parts so clipboard ingestion stabilizes
+before UI polish or advanced agent integration is attempted, but phase 1 already
+delivered more than storage alone. The breakdown below reflects the current
+implementation order and what remains.
 
-## Part 1: Core Domain and Storage
+## Part 1: Foundation baseline
+
+Status:
+
+- merged
 
 Goal:
 
-- define the data model
-- create SQLite schema
-- support insert/read/search operations
+- prove the data model, local store, config layer, and repo automation before
+  real clipboard ingestion exists
 
-Deliverables:
+Delivered:
 
-- `blip-core` crate
-- storage module inside `blip-core` or `blip-daemon`
-- DB migrations
-- search support through SQLite FTS5
+- `blip-core` domain and SQLite-backed storage
+- numbered DB migration baseline
+- transactional write paths for state plus audit events
+- persisted-data validation for stored enum and JSON values
+- `blip-config` config discovery and persistence
+- `blip-api` shared response models
+- `blip-clipboard` platform placeholders
+- `blip-cli` bootstrap commands for workspaces and demo blips
+- `blip-daemon` bootstrap binary
+- GitHub Actions quality gates
 
 Questions answered in this phase:
 
 - what is a `blip`
 - what is a `workspace`
 - what is an `audit event`
-- how do we support bundling
+- how should the local store be initialized
+- how does active workspace state behave
 
-## Part 2: Daemon and Clipboard Ingestion
+## Part 2: Daemon and clipboard ingestion
 
 Goal:
 
-- create `blipd`
-- watch clipboard changes
-- insert blips into `inbox`
+- make `blipd` the runtime owner for clipboard observation and persisted inbox
+  ingestion
 
 Deliverables:
 
-- daemon lifecycle
-- platform abstraction for clipboard reading/watching
-- ingestion pipeline
+- daemon lifecycle and long-running runtime loop
+- platform abstraction for clipboard reading and watching
+- ingestion pipeline into `inbox`
 - dedupe policy for repeated copies
+- clear ownership boundary between `blipd`, `blip-clipboard`, and `blip-core`
+- daemon-facing local API or IPC surface
 
 Questions answered in this phase:
 
 - how reliable is cross-platform clipboard observation
 - what should polling vs evented behavior look like
 - what metadata can we capture consistently
+- where should the daemon/client boundary live
 
-## Part 3: Routing and Workspace Model
+Constraint:
+
+- `blipd` owns clipboard observation; the CLI and desktop app should not watch
+  the clipboard directly
+
+## Part 3: CLI as a daemon client
 
 Goal:
 
-- allow user-controlled separation of concurrent tasks
+- keep the system usable from the terminal without bypassing daemon policy
+
+Deliverables:
+
+- `blip` CLI wired through the daemon boundary
+- shell-friendly output modes
+- human-readable table output
+- routing, search, bundle, and workspace commands
+- clear errors on stderr and stable data output on stdout
+
+Questions answered in this phase:
+
+- what is the minimum command set that makes the tool useful
+- how should active workspace selection behave in scripts
+
+Implementation note:
+
+- direct `blip-core` access is acceptable for early bootstrap/admin commands
+  while the daemon API is incomplete
+- commands that represent agent reads, policy-sensitive reads, or long-running
+  runtime behavior should go through `blipd`
+
+## Part 4: Workspace routing and policy
+
+Goal:
+
+- allow user-controlled separation of concurrent tasks with explicit read policy
 
 Deliverables:
 
 - create/delete/list workspaces
 - assign blips to workspaces
 - sticky workspace capture mode
-- active workspace state
 - policy gates for agent visibility
+- read audit trail
 
 Questions answered in this phase:
 
 - should `inbox` always exist
 - how should sticky mode interact with manual routing
 - how do users recover misrouted items
-
-## Part 4: CLI
-
-Goal:
-
-- make the system usable without a desktop app
-
-Deliverables:
-
-- `blip` CLI
-- shell-friendly JSON output
-- human-readable table output
-- routing, search, bundle, and workspace commands
-
-Questions answered in this phase:
-
-- what is the minimum command set that makes the tool useful
-- how should active workspace selection behave in scripts
+- should agents ever read `inbox`
 
 ## Part 5: Desktop App
 
@@ -122,26 +150,7 @@ Questions answered in this phase:
 - should routing be explicit or mostly sticky
 - should the overlay appear after every copy or only on demand
 
-## Part 7: Agent Access Layer
-
-Goal:
-
-- expose workspace-scoped reads safely to agents
-
-Deliverables:
-
-- scoped CLI subcommands
-- optional MCP server wrapper
-- read audit trail
-- workspace permission checks
-
-Questions answered in this phase:
-
-- should agents ever read `inbox`
-- how strict should default scoping be
-- what operations should be read-only forever
-
-## Part 8: Classification and Redaction
+## Part 7: Classification and Redaction
 
 Goal:
 
@@ -160,7 +169,7 @@ Questions answered in this phase:
 - which redactions should be automatic vs opt-in
 - what metadata is useful enough to display in UI
 
-## Part 9: Packaging and Distribution
+## Part 8: Packaging and Distribution
 
 Goal:
 
@@ -179,18 +188,3 @@ Packaging rule:
 - desktop bundles must include daemon + CLI
 - CLI-only installs are supported
 - desktop-only installs are not supported
-
-## Part 10: CI / CD
-
-Goal:
-
-- make every PR prove the Rust workspace is healthy before merge
-
-Deliverables:
-
-- GitHub Actions workflow
-- formatting checks
-- clippy lint checks
-- workspace tests
-- workspace build verification
-- PR targeting `develop` and `main`

@@ -62,7 +62,19 @@ CLI client responsible for:
 - searching history
 - scripting and shell integration
 
-The CLI should be a client of `blipd`, not a separate clipboard manager.
+During early storage and ingestion work, the CLI may call `blip-core` directly for
+bootstrap commands that only read or mutate the local store. Once `blipd` exposes
+the local API needed by a command, that command should move behind the daemon so
+policy enforcement and audit behavior remain centralized.
+
+The CLI should never become a second clipboard watcher or policy engine.
+
+Bootstrap note:
+
+- in phase 1, the CLI is allowed to talk to `blip-core` storage directly so the
+  workspace and audit model can be exercised before the daemon API exists
+- phase 2 should replace direct store access with daemon-mediated operations for
+  clipboard ingestion and shared runtime behavior
 
 ### 3. Desktop app
 
@@ -167,6 +179,36 @@ Optional policy features:
 - retention windows per workspace
 - lock specific workspaces from agent access
 
+## Runtime Ownership
+
+The simplest architecture that preserves the user experience is:
+
+- `blip-core` owns durable domain and storage rules
+- `blip-clipboard` owns platform-specific clipboard observation
+- `blipd` owns long-running ingestion, routing, policy, and future IPC/API access
+- `blip` owns terminal interaction and should stay thin
+- the desktop app owns visual interaction and should use the same daemon API as
+  other non-bootstrap clients
+
+This keeps Phase 2 focused: build reliable daemon-owned clipboard ingestion into
+`inbox` before introducing a broader API surface. Avoid adding direct clipboard
+watching to the CLI or desktop app.
+
+## Persistence Rules
+
+The local store should favor boring, recoverable behavior:
+
+- schema changes go through numbered migrations
+- multi-row writes use a transaction
+- audit entries commit with the state change they describe
+- invalid persisted enum or JSON values are surfaced as errors
+- platform paths should be handled as paths, not lossy strings
+- expected SQLite writer contention should return typed, user-facing errors
+- long-running surfaces should use bounded list queries and lightweight row
+  projections, with full clipboard content fetched explicitly by id
+- phase 2 should move ordinary runtime writes behind `blipd` so concurrent
+  clients do not become independent SQLite writers
+
 ## Data Flow
 
 1. User copies text in any app.
@@ -176,6 +218,16 @@ Optional policy features:
 5. User routes the `blip` into a workspace manually or via sticky mode.
 6. CLI or desktop sets active workspace.
 7. Agent tools query only that workspace.
+
+Phase 1 bootstrap flow:
+
+1. User runs the CLI locally.
+2. CLI opens the same local SQLite store as `blipd`.
+3. User creates workspaces, selects an active workspace, and inserts demo blips.
+4. Audit events are written directly by the store layer.
+
+This bootstrap path exists only to validate the storage and domain model before
+phase 2 introduces the real daemon ingestion boundary.
 
 ## Core Domain Objects
 
