@@ -43,7 +43,9 @@ impl BlipStore {
             retention_days: None,
         })?;
 
-        self.ensure_active_workspace(INBOX_WORKSPACE)?;
+        if self.get_active_workspace()?.is_none() {
+            self.ensure_active_workspace(INBOX_WORKSPACE)?;
+        }
 
         self.insert_audit_event(
             ActorType::System,
@@ -210,7 +212,7 @@ impl BlipStore {
     }
 
     fn create_workspace_if_missing(&self, workspace: &NewWorkspace) -> Result<(), BlipError> {
-        self.conn.execute(
+        let affected_rows = self.conn.execute(
             "INSERT OR IGNORE INTO workspaces (
                 name, description, color, agent_access, sticky_capture, retention_days, created_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -225,14 +227,16 @@ impl BlipStore {
             ],
         )?;
 
-        self.insert_audit_event(
-            ActorType::System,
-            None,
-            AuditEventType::WorkspaceCreated,
-            None,
-            Some(workspace.name.clone()),
-            None,
-        )?;
+        if affected_rows > 0 {
+            self.insert_audit_event(
+                ActorType::System,
+                None,
+                AuditEventType::WorkspaceCreated,
+                None,
+                Some(workspace.name.clone()),
+                None,
+            )?;
+        }
 
         Ok(())
     }

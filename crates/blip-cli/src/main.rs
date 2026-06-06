@@ -118,5 +118,12 @@ fn summarize(content: &str) -> String {
         return content.to_string();
     }
 
-    format!("{}...", &content[..MAX_LEN])
+    let end = content
+        .char_indices()
+        .map(|(index, _)| index)
+        .take_while(|index| *index <= MAX_LEN)
+        .last()
+        .unwrap_or(0);
+
+    format!("{}...", &content[..end])
 }

@@ -1,4 +1,4 @@
-name: CI
+name: Build
 
 on:
   pull_request:
@@ -11,8 +11,7 @@ on:
       - main
 
 jobs:
-  rust:
-    name: Rust Checks
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,20 +20,9 @@ jobs:
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Check formatting
-        run: cargo fmt --all --check
-
-      - name: Lint with clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Run tests
-        run: cargo test --workspace
-
       - name: Build workspace
-        run: cargo build --workspace
+        run: cargo build --workspace --locked

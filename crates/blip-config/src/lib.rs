@@ -1,5 +1,6 @@
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -26,6 +27,16 @@ pub struct BlipConfig {
 
 impl BlipConfig {
     pub fn load_or_create() -> Result<Self, ConfigError> {
+        if let Some(db_path) = env_override_database_path() {
+            if let Some(parent) = db_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            return Ok(Self {
+                database_path: db_path,
+            });
+        }
+
         let config_path = config_file_path()?;
 
         if config_path.exists() {
@@ -60,9 +71,22 @@ impl BlipConfig {
 }
 
 pub fn config_file_path() -> Result<PathBuf, ConfigError> {
+    if let Some(config_dir) = env_override_config_dir() {
+        fs::create_dir_all(&config_dir)?;
+        return Ok(config_dir.join("config.toml"));
+    }
+
     let dirs = project_dirs()?;
     fs::create_dir_all(dirs.config_dir())?;
     Ok(dirs.config_dir().join("config.toml"))
+}
+
+fn env_override_config_dir() -> Option<PathBuf> {
+    env::var_os("BLIPCOARD_CONFIG_DIR").map(PathBuf::from)
+}
+
+fn env_override_database_path() -> Option<PathBuf> {
+    env::var_os("BLIPCOARD_DB_PATH").map(PathBuf::from)
 }
 
 fn project_dirs() -> Result<ProjectDirs, ConfigError> {
