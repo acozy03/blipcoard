@@ -2,6 +2,8 @@ use blip_config::BlipConfig;
 use blip_core::{BlipError, BlipStore, ContentType, NewBlip, NewWorkspace};
 use clap::{Parser, Subcommand};
 
+const DEFAULT_LIST_LIMIT: usize = 50;
+
 #[derive(Debug, Parser)]
 #[command(name = "blip")]
 #[command(about = "CLI for interacting with the blipcoard runtime", long_about = None)]
@@ -14,9 +16,14 @@ struct Cli {
 enum Commands {
     Current,
     Workspaces,
-    Inbox,
+    Inbox {
+        #[arg(long, default_value_t = DEFAULT_LIST_LIMIT)]
+        limit: usize,
+    },
     List {
         workspace: String,
+        #[arg(long, default_value_t = DEFAULT_LIST_LIMIT)]
+        limit: usize,
     },
     Create {
         name: String,
@@ -60,14 +67,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{} [{access}]", workspace.name);
             }
         }
-        Commands::Inbox => {
-            for blip in store.list_blips("inbox")? {
-                println!("{} :: {}", blip.id, summarize(&blip.content));
+        Commands::Inbox { limit } => {
+            for blip in store.list_blip_summaries("inbox", limit)? {
+                println!(
+                    "{} :: {}",
+                    blip.id,
+                    format_preview(&blip.preview, blip.size_bytes)
+                );
             }
         }
-        Commands::List { workspace } => {
-            for blip in store.list_blips(&workspace)? {
-                println!("{} :: {}", blip.id, summarize(&blip.content));
+        Commands::List { workspace, limit } => {
+            for blip in store.list_blip_summaries(&workspace, limit)? {
+                println!(
+                    "{} :: {}",
+                    blip.id,
+                    format_preview(&blip.preview, blip.size_bytes)
+                );
             }
         }
         Commands::Create {
@@ -118,18 +133,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn summarize(content: &str) -> String {
-    const MAX_LEN: usize = 72;
-    if content.len() <= MAX_LEN {
-        return content.to_string();
+fn format_preview(preview: &str, size_bytes: i64) -> String {
+    if i64::try_from(preview.len()).is_ok_and(|preview_len| preview_len < size_bytes) {
+        format!("{preview}...")
+    } else {
+        preview.to_owned()
     }
-
-    let end = content
-        .char_indices()
-        .map(|(index, _)| index)
-        .take_while(|index| *index <= MAX_LEN)
-        .last()
-        .unwrap_or(0);
-
-    format!("{}...", &content[..end])
 }

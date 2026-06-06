@@ -203,6 +203,11 @@ The local store should favor boring, recoverable behavior:
 - audit entries commit with the state change they describe
 - invalid persisted enum or JSON values are surfaced as errors
 - platform paths should be handled as paths, not lossy strings
+- expected SQLite writer contention should return typed, user-facing errors
+- long-running surfaces should use bounded list queries and lightweight row
+  projections, with full clipboard content fetched explicitly by id
+- phase 2 should move ordinary runtime writes behind `blipd` so concurrent
+  clients do not become independent SQLite writers
 
 ## Data Flow
 

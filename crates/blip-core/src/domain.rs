@@ -63,6 +63,21 @@ pub struct Blip {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlipSummary {
+    pub id: String,
+    pub workspace_name: String,
+    pub source_app: Option<String>,
+    pub content_type: ContentType,
+    pub language: Option<String>,
+    pub preview: String,
+    pub size_bytes: i64,
+    pub token_estimate: Option<i64>,
+    pub is_redacted: bool,
+    pub tags: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewBlip {
     pub workspace_name: String,
     pub source_app: Option<String>,

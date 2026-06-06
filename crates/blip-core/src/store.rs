@@ -1,14 +1,21 @@
 use crate::domain::{
-    ActorType, AuditEvent, AuditEventType, Blip, ContentType, NewBlip, NewWorkspace, Workspace,
+    ActorType, AuditEvent, AuditEventType, Blip, BlipSummary, ContentType, NewBlip, NewWorkspace,
+    Workspace,
 };
-use crate::error::BlipError;
+use crate::error::{BlipError, is_sqlite_busy_error};
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
 use std::path::Path;
+use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
 
 const INBOX_WORKSPACE: &str = "inbox";
+const DEFAULT_LIST_LIMIT: usize = 100;
+const DEFAULT_BLIP_PREVIEW_CHARS: i64 = 72;
+const BUSY_RETRY_ATTEMPTS: usize = 5;
+const BUSY_RETRY_DELAY: Duration = Duration::from_millis(25);
+const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct Migration {
     version: i32,
@@ -47,12 +54,18 @@ impl BlipStore {
 
     fn configure_connection(conn: &Connection) -> Result<(), BlipError> {
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        conn.busy_timeout(Duration::from_secs(5))?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         Ok(())
     }
 
     fn initialize(&mut self) -> Result<(), BlipError> {
-        let tx = self.conn.transaction()?;
+        self.with_busy_retry(Self::initialize_once)
+    }
+
+    fn initialize_once(&mut self) -> Result<(), BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::apply_migrations(&tx)?;
 
         Self::insert_workspace(
@@ -108,8 +121,31 @@ impl BlipStore {
         Ok(())
     }
 
+    fn with_busy_retry<T>(
+        &mut self,
+        mut operation: impl FnMut(&mut Self) -> Result<T, BlipError>,
+    ) -> Result<T, BlipError> {
+        for attempt in 0..BUSY_RETRY_ATTEMPTS {
+            match operation(self) {
+                Err(BlipError::DatabaseBusy) if attempt + 1 < BUSY_RETRY_ATTEMPTS => {
+                    thread::sleep(BUSY_RETRY_DELAY);
+                }
+                result => return result,
+            }
+        }
+
+        Err(BlipError::DatabaseBusy)
+    }
+
     pub fn create_workspace(&mut self, workspace: &NewWorkspace) -> Result<Workspace, BlipError> {
-        let tx = self.conn.transaction()?;
+        validate_workspace(workspace)?;
+        self.with_busy_retry(|store| store.create_workspace_once(workspace))
+    }
+
+    fn create_workspace_once(&mut self, workspace: &NewWorkspace) -> Result<Workspace, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         if Self::get_workspace_from(&tx, &workspace.name)?.is_some() {
             return Err(BlipError::WorkspaceAlreadyExists(workspace.name.clone()));
@@ -171,7 +207,13 @@ impl BlipStore {
     }
 
     pub fn set_active_workspace(&mut self, name: &str) -> Result<(), BlipError> {
-        let tx = self.conn.transaction()?;
+        self.with_busy_retry(|store| store.set_active_workspace_once(name))
+    }
+
+    fn set_active_workspace_once(&mut self, name: &str) -> Result<(), BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         if Self::get_workspace_from(&tx, name)?.is_none() {
             return Err(BlipError::WorkspaceNotFound(name.to_owned()));
@@ -207,7 +249,14 @@ impl BlipStore {
     }
 
     pub fn insert_blip(&mut self, new_blip: &NewBlip) -> Result<Blip, BlipError> {
-        let tx = self.conn.transaction()?;
+        validate_blip(new_blip)?;
+        self.with_busy_retry(|store| store.insert_blip_once(new_blip))
+    }
+
+    fn insert_blip_once(&mut self, new_blip: &NewBlip) -> Result<Blip, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         if Self::get_workspace_from(&tx, &new_blip.workspace_name)?.is_none() {
             return Err(BlipError::WorkspaceNotFound(
@@ -277,6 +326,14 @@ impl BlipStore {
     }
 
     pub fn list_blips(&self, workspace_name: &str) -> Result<Vec<Blip>, BlipError> {
+        self.list_blips_limited(workspace_name, DEFAULT_LIST_LIMIT)
+    }
+
+    pub fn list_blips_limited(
+        &self,
+        workspace_name: &str,
+        limit: usize,
+    ) -> Result<Vec<Blip>, BlipError> {
         if self.get_workspace(workspace_name)?.is_none() {
             return Err(BlipError::WorkspaceNotFound(workspace_name.to_owned()));
         }
@@ -286,10 +343,11 @@ impl BlipStore {
                     token_estimate, is_redacted, tags_json, created_at
              FROM blips
              WHERE workspace_name = ?1
-             ORDER BY created_at DESC",
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?2",
         )?;
 
-        let mut rows = stmt.query([workspace_name])?;
+        let mut rows = stmt.query(params![workspace_name, sqlite_limit(limit)])?;
         let mut blips = Vec::new();
 
         while let Some(row) = rows.next()? {
@@ -297,6 +355,39 @@ impl BlipStore {
         }
 
         Ok(blips)
+    }
+
+    pub fn list_blip_summaries(
+        &self,
+        workspace_name: &str,
+        limit: usize,
+    ) -> Result<Vec<BlipSummary>, BlipError> {
+        if self.get_workspace(workspace_name)?.is_none() {
+            return Err(BlipError::WorkspaceNotFound(workspace_name.to_owned()));
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace_name, source_app, content_type, language,
+                    substr(content, 1, ?2), size_bytes, token_estimate, is_redacted, tags_json,
+                    created_at
+             FROM blips
+             WHERE workspace_name = ?1
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?3",
+        )?;
+
+        let mut rows = stmt.query(params![
+            workspace_name,
+            DEFAULT_BLIP_PREVIEW_CHARS,
+            sqlite_limit(limit)
+        ])?;
+        let mut summaries = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            summaries.push(map_blip_summary_row(row)?);
+        }
+
+        Ok(summaries)
     }
 
     fn insert_workspace(
@@ -314,7 +405,7 @@ impl BlipStore {
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
         };
 
-        let affected_rows = conn.execute(
+        let affected_rows = match conn.execute(
             statement,
             params![
                 workspace.name,
@@ -325,7 +416,21 @@ impl BlipStore {
                 workspace.retention_days,
                 Utc::now(),
             ],
-        )?;
+        ) {
+            Ok(affected_rows) => affected_rows,
+            Err(error)
+                if !ignore_if_exists
+                    && matches!(
+                        error,
+                        rusqlite::Error::SqliteFailure(sqlite_error, _)
+                            if sqlite_error.code == ErrorCode::ConstraintViolation
+                    ) =>
+            {
+                return Err(BlipError::WorkspaceAlreadyExists(workspace.name.clone()));
+            }
+            Err(error) if is_sqlite_busy_error(&error) => return Err(BlipError::DatabaseBusy),
+            Err(error) => return Err(BlipError::Database(error)),
+        };
 
         if affected_rows > 0 {
             Self::insert_audit_event(
@@ -380,12 +485,16 @@ impl BlipStore {
     }
 
     pub fn list_audit_events(&self) -> Result<Vec<AuditEvent>, BlipError> {
+        self.list_audit_events_limited(DEFAULT_LIST_LIMIT)
+    }
+
+    pub fn list_audit_events_limited(&self, limit: usize) -> Result<Vec<AuditEvent>, BlipError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, actor_type, actor_id, event_type, target_blip_id, target_workspace, details_json, created_at
-             FROM audit_events ORDER BY created_at DESC",
+             FROM audit_events ORDER BY created_at DESC, id DESC LIMIT ?1",
         )?;
 
-        let mut rows = stmt.query([])?;
+        let mut rows = stmt.query([sqlite_limit(limit)])?;
         let mut events = Vec::new();
 
         while let Some(row) = rows.next()? {
@@ -403,6 +512,42 @@ impl BlipStore {
 
         Ok(events)
     }
+}
+
+fn validate_workspace(workspace: &NewWorkspace) -> Result<(), BlipError> {
+    if workspace.name.trim().is_empty() {
+        return Err(BlipError::InvalidInput {
+            field: "workspace.name",
+            reason: "must not be empty",
+        });
+    }
+
+    if workspace.retention_days.is_some_and(|days| days < 0) {
+        return Err(BlipError::InvalidInput {
+            field: "workspace.retention_days",
+            reason: "must be greater than or equal to 0",
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_blip(blip: &NewBlip) -> Result<(), BlipError> {
+    if blip.workspace_name.trim().is_empty() {
+        return Err(BlipError::InvalidInput {
+            field: "blip.workspace_name",
+            reason: "must not be empty",
+        });
+    }
+
+    if blip.token_estimate.is_some_and(|estimate| estimate < 0) {
+        return Err(BlipError::InvalidInput {
+            field: "blip.token_estimate",
+            reason: "must be greater than or equal to 0",
+        });
+    }
+
+    Ok(())
 }
 
 fn map_blip_row(row: &rusqlite::Row<'_>) -> Result<Blip, BlipError> {
@@ -424,10 +569,34 @@ fn map_blip_row(row: &rusqlite::Row<'_>) -> Result<Blip, BlipError> {
     })
 }
 
+fn map_blip_summary_row(row: &rusqlite::Row<'_>) -> Result<BlipSummary, BlipError> {
+    let tags_json: String = row.get(9)?;
+    let tags = serde_json::from_str(&tags_json)?;
+
+    Ok(BlipSummary {
+        id: row.get(0)?,
+        workspace_name: row.get(1)?,
+        source_app: row.get(2)?,
+        content_type: ContentType::parse(row.get::<_, String>(3)?.as_str())?,
+        language: row.get(4)?,
+        preview: row.get(5)?,
+        size_bytes: row.get(6)?,
+        token_estimate: row.get(7)?,
+        is_redacted: row.get(8)?,
+        tags,
+        created_at: row.get::<_, DateTime<Utc>>(10)?,
+    })
+}
+
+fn sqlite_limit(limit: usize) -> i64 {
+    i64::try_from(limit).unwrap_or(i64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::{ContentType, NewBlip, NewWorkspace};
+    use std::sync::{Arc, Barrier};
 
     #[test]
     fn initializes_with_inbox_and_active_workspace() {
@@ -526,6 +695,153 @@ mod tests {
             .expect_err("second create should fail");
 
         assert!(matches!(error, BlipError::WorkspaceAlreadyExists(name) if name == "demo"));
+    }
+
+    #[test]
+    fn rejects_invalid_workspace_and_blip_input() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+
+        let workspace_error = store
+            .create_workspace(&NewWorkspace {
+                name: " ".into(),
+                description: None,
+                color: None,
+                agent_access: false,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect_err("empty workspace names should be rejected");
+        assert!(matches!(
+            workspace_error,
+            BlipError::InvalidInput {
+                field: "workspace.name",
+                ..
+            }
+        ));
+
+        let retention_error = store
+            .create_workspace(&NewWorkspace {
+                name: "invalid-retention".into(),
+                description: None,
+                color: None,
+                agent_access: false,
+                sticky_capture: false,
+                retention_days: Some(-1),
+            })
+            .expect_err("negative retention should be rejected");
+        assert!(matches!(
+            retention_error,
+            BlipError::InvalidInput {
+                field: "workspace.retention_days",
+                ..
+            }
+        ));
+
+        let blip_error = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "invalid token estimate".into(),
+                token_estimate: Some(-1),
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect_err("negative token estimates should be rejected");
+        assert!(matches!(
+            blip_error,
+            BlipError::InvalidInput {
+                field: "blip.token_estimate",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn concurrent_workspace_creation_returns_created_or_duplicate() {
+        let db_path = Arc::new(
+            std::env::temp_dir().join(format!("blipcoard-concurrent-{}.db", Uuid::new_v4())),
+        );
+        let barrier = Arc::new(Barrier::new(12));
+        let mut handles = Vec::new();
+
+        for _ in 0..12 {
+            let db_path = Arc::clone(&db_path);
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                let mut store = BlipStore::open(db_path.as_ref())?;
+                store.create_workspace(&NewWorkspace {
+                    name: "race".into(),
+                    description: None,
+                    color: None,
+                    agent_access: false,
+                    sticky_capture: false,
+                    retention_days: None,
+                })
+            }));
+        }
+
+        let mut created_count = 0;
+        let mut duplicate_count = 0;
+
+        for handle in handles {
+            match handle.join().expect("thread should finish") {
+                Ok(_) => created_count += 1,
+                Err(BlipError::WorkspaceAlreadyExists(name)) if name == "race" => {
+                    duplicate_count += 1;
+                }
+                Err(error) => panic!("unexpected error: {error:?}"),
+            }
+        }
+
+        assert_eq!(created_count, 1);
+        assert_eq!(duplicate_count, 11);
+
+        let _ = std::fs::remove_file(db_path.as_ref());
+    }
+
+    #[test]
+    fn blip_and_audit_list_queries_are_bounded() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let long_content = format!("{}{}", "a".repeat(90), "tail");
+
+        for index in 0..3 {
+            store
+                .insert_blip(&NewBlip {
+                    workspace_name: "inbox".into(),
+                    source_app: None,
+                    content_type: ContentType::PlainText,
+                    language: None,
+                    content: format!("{long_content}-{index}"),
+                    token_estimate: None,
+                    is_redacted: false,
+                    tags: Vec::new(),
+                })
+                .expect("blip insert should work");
+        }
+
+        let full_blips = store
+            .list_blips_limited("inbox", 2)
+            .expect("limited blip list should work");
+        assert_eq!(full_blips.len(), 2);
+
+        let summaries = store
+            .list_blip_summaries("inbox", 2)
+            .expect("summary list should work");
+        assert_eq!(summaries.len(), 2);
+        assert!(summaries.iter().all(|summary| summary.preview.len() <= 72));
+        assert!(
+            summaries
+                .iter()
+                .all(|summary| !summary.preview.contains("tail"))
+        );
+
+        let audit_events = store
+            .list_audit_events_limited(1)
+            .expect("limited audit list should work");
+        assert_eq!(audit_events.len(), 1);
     }
 
     #[test]

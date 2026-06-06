@@ -3,13 +3,22 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum BlipError {
     #[error("database error: {0}")]
-    Database(#[from] rusqlite::Error),
+    Database(rusqlite::Error),
+
+    #[error("database is busy; retry after the current blipcoard operation finishes")]
+    DatabaseBusy,
 
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
     #[error("invalid persisted value for {field}: {value}")]
     InvalidPersistedValue { field: &'static str, value: String },
+
+    #[error("invalid {field}: {reason}")]
+    InvalidInput {
+        field: &'static str,
+        reason: &'static str,
+    },
 
     #[error("workspace `{0}` does not exist")]
     WorkspaceNotFound(String),
@@ -19,4 +28,25 @@ pub enum BlipError {
 
     #[error("active workspace is not set")]
     ActiveWorkspaceNotSet,
+}
+
+impl From<rusqlite::Error> for BlipError {
+    fn from(error: rusqlite::Error) -> Self {
+        if is_sqlite_busy_error(&error) {
+            Self::DatabaseBusy
+        } else {
+            Self::Database(error)
+        }
+    }
+}
+
+pub(crate) fn is_sqlite_busy_error(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(error, _)
+            if matches!(
+                error.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+            )
+    )
 }
