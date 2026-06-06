@@ -79,4 +79,6 @@ Use the `gh` CLI as part of normal task management:
   work that should be tracked separately
 - apply the repo labels and project fields/tags that match the work type, phase,
   and current status instead of leaving new tasks uncategorized
+- set the project Iteration field for new tasks because the Blipcoard board is
+  filtered by iteration
 - keep phase and deliverable issues aligned with `docs/mvp-phases.md`
