@@ -127,6 +127,9 @@ dependencies = [
 [[package]]
 name = "blip-clipboard"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "blip-config"
