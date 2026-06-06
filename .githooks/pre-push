@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+remote_name="${1:-origin}"
+
+commitlint_bin="./node_modules/.bin/commitlint"
+
+if [ ! -x "${commitlint_bin}" ]; then
+  echo "blipcoard: commitlint is not installed. Run 'npm install' first." >&2
+  exit 1
+fi
+
+zero_sha="0000000000000000000000000000000000000000"
+default_base_ref="${remote_name}/develop"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ -z "${local_sha}" ] || [ "${local_sha}" = "${zero_sha}" ]; then
+    continue
+  fi
+
+  if [ -n "${remote_sha}" ] && [ "${remote_sha}" != "${zero_sha}" ]; then
+    from_ref="${remote_sha}"
+  elif git rev-parse --verify "${default_base_ref}" >/dev/null 2>&1; then
+    from_ref="$(git merge-base "${local_sha}" "${default_base_ref}")"
+  else
+    from_ref="$(git rev-list --max-parents=0 "${local_sha}" | tail -n 1)"
+  fi
+
+  echo "blipcoard: linting commits in ${from_ref}..${local_sha}" >&2
+  "${commitlint_bin}" --from "${from_ref}" --to "${local_sha}" --verbose
+done

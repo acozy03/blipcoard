@@ -1,0 +1,20 @@
+[package]
+name = "blip-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+blip-config = { path = "../blip-config" }
+blip-core = { path = "../blip-core" }
+clap.workspace = true
+
+[dev-dependencies]
+assert_cmd = "2.1.1"
+predicates = "3.1.3"
+rusqlite.workspace = true
+tempfile = "3.23.0"
+
+[lints]
+workspace = true
