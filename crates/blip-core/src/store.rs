@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 const INBOX_WORKSPACE: &str = "inbox";
 const DEFAULT_LIST_LIMIT: usize = 100;
+const MAX_LIST_LIMIT: usize = 500;
 const DEFAULT_BLIP_PREVIEW_CHARS: i64 = 72;
 const BUSY_RETRY_ATTEMPTS: usize = 5;
 const BUSY_RETRY_DELAY: Duration = Duration::from_millis(25);
@@ -522,6 +523,13 @@ fn validate_workspace(workspace: &NewWorkspace) -> Result<(), BlipError> {
         });
     }
 
+    if workspace.name.trim() != workspace.name {
+        return Err(BlipError::InvalidInput {
+            field: "workspace.name",
+            reason: "must not have leading or trailing whitespace",
+        });
+    }
+
     if workspace.retention_days.is_some_and(|days| days < 0) {
         return Err(BlipError::InvalidInput {
             field: "workspace.retention_days",
@@ -589,7 +597,7 @@ fn map_blip_summary_row(row: &rusqlite::Row<'_>) -> Result<BlipSummary, BlipErro
 }
 
 fn sqlite_limit(limit: usize) -> i64 {
-    i64::try_from(limit).unwrap_or(i64::MAX)
+    i64::try_from(limit.min(MAX_LIST_LIMIT)).unwrap_or(MAX_LIST_LIMIT as i64)
 }
 
 #[cfg(test)]
@@ -719,6 +727,24 @@ mod tests {
             }
         ));
 
+        let whitespace_error = store
+            .create_workspace(&NewWorkspace {
+                name: " demo ".into(),
+                description: None,
+                color: None,
+                agent_access: false,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect_err("workspace names should not have surrounding whitespace");
+        assert!(matches!(
+            whitespace_error,
+            BlipError::InvalidInput {
+                field: "workspace.name",
+                ..
+            }
+        ));
+
         let retention_error = store
             .create_workspace(&NewWorkspace {
                 name: "invalid-retention".into(),
@@ -842,6 +868,8 @@ mod tests {
             .list_audit_events_limited(1)
             .expect("limited audit list should work");
         assert_eq!(audit_events.len(), 1);
+
+        assert_eq!(sqlite_limit(usize::MAX), MAX_LIST_LIMIT as i64);
     }
 
     #[test]
