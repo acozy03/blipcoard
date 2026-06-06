@@ -7,13 +7,14 @@
 use blip_api::HealthResponse;
 use blip_core::{BlipError, BlipStore};
 use chrono::Utc;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
 const PENDING_SOURCE_INTERVAL: Duration = Duration::from_secs(1);
 
 pub struct DaemonRuntime<S> {
+    database_path: PathBuf,
     store: BlipStore,
     source: S,
 }
@@ -22,29 +23,29 @@ impl<S> DaemonRuntime<S>
 where
     S: IngestionSource,
 {
-    pub fn new(store: BlipStore, source: S) -> Self {
-        Self { store, source }
+    pub fn new(database_path: impl AsRef<Path>, store: BlipStore, source: S) -> Self {
+        Self {
+            database_path: database_path.as_ref().to_owned(),
+            store,
+            source,
+        }
     }
 
-    pub fn health_response(&self, database_path: &Path) -> Result<HealthResponse, BlipError> {
+    pub fn health_response(&self) -> Result<HealthResponse, BlipError> {
         Ok(HealthResponse {
             service: "blipd".to_string(),
             status: "ready".to_string(),
-            database_path: database_path.display().to_string(),
+            database_path: self.database_path.display().to_string(),
             active_workspace: self.store.get_active_workspace()?,
             generated_at: Utc::now(),
         })
     }
 
-    pub fn run(&mut self) -> RuntimeStats {
-        let mut stats = RuntimeStats::default();
-
+    pub fn run(&mut self) {
         loop {
             match self.source.wait_for_next() {
-                RuntimeEvent::Idle => {
-                    stats.idle_cycles = stats.idle_cycles.saturating_add(1);
-                }
-                RuntimeEvent::Shutdown => return stats,
+                RuntimeEvent::Idle => {}
+                RuntimeEvent::Shutdown => return,
             }
         }
     }
@@ -58,11 +59,6 @@ pub trait IngestionSource {
 pub enum RuntimeEvent {
     Idle,
     Shutdown,
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeStats {
-    pub idle_cycles: u64,
 }
 
 pub struct PendingIngestionSource {
@@ -90,10 +86,12 @@ mod tests {
 
     struct ScriptedIngestionSource {
         events: Vec<RuntimeEvent>,
+        calls: usize,
     }
 
     impl IngestionSource for ScriptedIngestionSource {
         fn wait_for_next(&mut self) -> RuntimeEvent {
+            self.calls += 1;
             self.events.pop().unwrap_or(RuntimeEvent::Shutdown)
         }
     }
@@ -107,21 +105,29 @@ mod tests {
                 RuntimeEvent::Idle,
                 RuntimeEvent::Idle,
             ],
+            calls: 0,
         };
-        let mut runtime = DaemonRuntime::new(store, source);
+        let mut runtime = DaemonRuntime::new("/tmp/blipcoard-test.db", store, source);
 
-        let stats = runtime.run();
+        runtime.run();
 
-        assert_eq!(stats.idle_cycles, 2);
+        assert_eq!(runtime.source.calls, 3);
     }
 
     #[test]
     fn runtime_reports_health_from_owned_store() {
         let store = BlipStore::in_memory().expect("store should initialize");
-        let runtime = DaemonRuntime::new(store, ScriptedIngestionSource { events: Vec::new() });
+        let runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
 
         let response = runtime
-            .health_response(Path::new("/tmp/blipcoard-test.db"))
+            .health_response()
             .expect("health response should be built");
 
         assert_eq!(response.service, "blipd");
