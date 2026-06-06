@@ -19,6 +19,9 @@ Goal:
 Delivered:
 
 - `blip-core` domain and SQLite-backed storage
+- numbered DB migration baseline
+- transactional write paths for state plus audit events
+- persisted-data validation for stored enum and JSON values
 - `blip-config` config discovery and persistence
 - `blip-api` shared response models
 - `blip-clipboard` platform placeholders
@@ -47,6 +50,7 @@ Deliverables:
 - platform abstraction for clipboard reading and watching
 - ingestion pipeline into `inbox`
 - dedupe policy for repeated copies
+- clear ownership boundary between `blipd`, `blip-clipboard`, and `blip-core`
 - daemon-facing local API or IPC surface
 
 Questions answered in this phase:
@@ -55,6 +59,11 @@ Questions answered in this phase:
 - what should polling vs evented behavior look like
 - what metadata can we capture consistently
 - where should the daemon/client boundary live
+
+Constraint:
+
+- `blipd` owns clipboard observation; the CLI and desktop app should not watch
+  the clipboard directly
 
 ## Part 3: CLI as a daemon client
 
@@ -68,11 +77,19 @@ Deliverables:
 - shell-friendly output modes
 - human-readable table output
 - routing, search, bundle, and workspace commands
+- clear errors on stderr and stable data output on stdout
 
 Questions answered in this phase:
 
 - what is the minimum command set that makes the tool useful
 - how should active workspace selection behave in scripts
+
+Implementation note:
+
+- direct `blip-core` access is acceptable for early bootstrap/admin commands
+  while the daemon API is incomplete
+- commands that represent agent reads, policy-sensitive reads, or long-running
+  runtime behavior should go through `blipd`
 
 ## Part 4: Workspace routing and policy
 

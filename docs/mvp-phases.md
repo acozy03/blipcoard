@@ -13,6 +13,9 @@ Included deliverables:
 
 - repository and workspace layout for the runtime crates
 - SQLite schema for `workspaces`, `blips`, `audit_events`, and app state
+- numbered migration baseline for the local store
+- transactional writes for state changes plus audit events
+- persisted-data validation for stored enum and JSON values
 - `blip-core` domain and storage APIs
 - default `inbox` workspace and active workspace state
 - bootstrap CLI commands for workspace and demo blip management
@@ -36,7 +39,15 @@ Must have:
 - clipboard watcher or polling abstraction behind `blip-clipboard`
 - automatic ingestion into `inbox`
 - dedupe policy for repeated copies
+- durable ingestion through `blip-core`
 - shared local API or IPC boundary for daemon clients
+
+Boundary:
+
+- `blipd` owns clipboard watching
+- `blip-clipboard` owns platform-specific observation
+- CLI commands may still use direct store access for bootstrap/admin workflows
+  until the daemon API exists, but they should not watch the clipboard
 
 Success condition:
 
@@ -63,6 +74,7 @@ Must have:
 - agent-safe scoped read commands
 - no default access to `inbox`
 - explicit policy checks around readable workspaces
+- daemon-mediated access for agent reads
 - read-side audit events
 
 Success condition:

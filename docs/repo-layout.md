@@ -25,6 +25,7 @@ blipcoard/
 
 - domain types
 - workspace logic
+- SQLite migrations and store invariants
 - bundle generation
 - classification interfaces
 
@@ -46,6 +47,7 @@ Current state:
 - terminal UX
 - JSON output
 - human table output
+- bootstrap/admin store commands until daemon APIs are available
 
 Current state:
 
@@ -59,6 +61,7 @@ Current state:
 ### `blip-clipboard`
 
 - platform abstraction for clipboard access and clipboard watching
+- no storage or policy ownership
 
 ### `blip-config`
 

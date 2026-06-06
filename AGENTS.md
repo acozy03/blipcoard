@@ -58,3 +58,14 @@ When making Rust changes here:
 - keep platform-specific behavior isolated from shared core logic
 - avoid `unwrap()` in library code unless the invariant is explicit and local
 - add tests for storage, routing, and CLI behavior when behavior changes
+
+## GitHub Issue Workflow
+
+Use the `gh` CLI as part of normal task management:
+
+- inspect open issues before starting work with `gh issue list` and `gh issue view`
+- reference the relevant issue number in branch names, commits, PRs, and status
+  updates when one exists
+- update issue status after completing work or moving a task forward
+- create focused follow-up issues when a task reveals new scoped work
+- keep phase and deliverable issues aligned with `docs/mvp-phases.md`

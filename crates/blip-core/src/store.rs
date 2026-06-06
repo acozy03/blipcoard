@@ -3,13 +3,22 @@ use crate::domain::{
 };
 use crate::error::BlipError;
 use chrono::{DateTime, Utc};
-use rusqlite::ErrorCode;
-use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, params};
-use std::io;
+use std::path::Path;
+use std::time::Duration;
 use uuid::Uuid;
 
 const INBOX_WORKSPACE: &str = "inbox";
+
+struct Migration {
+    version: i32,
+    sql: &'static str,
+}
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: include_str!("sql/001_initial.sql"),
+}];
 
 pub struct BlipStore {
     conn: Connection,
@@ -18,14 +27,16 @@ pub struct BlipStore {
 impl BlipStore {
     pub fn in_memory() -> Result<Self, BlipError> {
         let conn = Connection::open_in_memory()?;
-        let store = Self { conn };
+        Self::configure_connection(&conn)?;
+        let mut store = Self { conn };
         store.initialize()?;
         Ok(store)
     }
 
-    pub fn open(path: &str) -> Result<Self, BlipError> {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, BlipError> {
         let conn = Connection::open(path)?;
-        let store = Self { conn };
+        Self::configure_connection(&conn)?;
+        let mut store = Self { conn };
         store.initialize()?;
         Ok(store)
     }
@@ -34,29 +45,41 @@ impl BlipStore {
         &self.conn
     }
 
-    fn initialize(&self) -> Result<(), BlipError> {
-        self.conn.execute_batch(include_str!("sql/schema.sql"))?;
+    fn configure_connection(conn: &Connection) -> Result<(), BlipError> {
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        Ok(())
+    }
 
-        self.create_workspace_if_missing(&NewWorkspace {
-            name: INBOX_WORKSPACE.to_owned(),
-            description: Some("Default capture workspace".to_owned()),
-            color: Some("#777777".to_owned()),
-            agent_access: false,
-            sticky_capture: false,
-            retention_days: None,
-        })?;
+    fn initialize(&mut self) -> Result<(), BlipError> {
+        let tx = self.conn.transaction()?;
+        Self::apply_migrations(&tx)?;
 
-        if self.get_active_workspace()?.is_none() {
-            self.ensure_active_workspace(INBOX_WORKSPACE)?;
+        Self::insert_workspace(
+            &tx,
+            &NewWorkspace {
+                name: INBOX_WORKSPACE.to_owned(),
+                description: Some("Default capture workspace".to_owned()),
+                color: Some("#777777".to_owned()),
+                agent_access: false,
+                sticky_capture: false,
+                retention_days: None,
+            },
+            true,
+        )?;
+
+        if Self::get_active_workspace_from(&tx)?.is_none() {
+            Self::ensure_active_workspace(&tx, INBOX_WORKSPACE)?;
         }
 
-        let schema_initialized = self.conn.execute(
+        let schema_initialized = tx.execute(
             "INSERT OR IGNORE INTO app_state(key, value) VALUES('schema_version', '1')",
             [],
         )?;
 
         if schema_initialized > 0 {
-            self.insert_audit_event(
+            Self::insert_audit_event(
+                &tx,
                 ActorType::System,
                 None,
                 AuditEventType::SchemaInitialized,
@@ -66,20 +89,38 @@ impl BlipStore {
             )?;
         }
 
+        tx.commit()?;
         Ok(())
     }
 
-    pub fn create_workspace(&self, workspace: &NewWorkspace) -> Result<Workspace, BlipError> {
-        if let Err(error) = self.insert_workspace(workspace, false) {
-            if is_unique_constraint(&error) {
-                return Err(BlipError::WorkspaceAlreadyExists(workspace.name.clone()));
-            }
+    fn apply_migrations(conn: &Connection) -> Result<(), BlipError> {
+        let current_version =
+            conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i32>(0))?;
 
-            return Err(error);
+        for migration in MIGRATIONS
+            .iter()
+            .filter(|migration| migration.version > current_version)
+        {
+            conn.execute_batch(migration.sql)?;
+            conn.pragma_update(None, "user_version", migration.version)?;
         }
 
-        self.get_workspace(&workspace.name)?
-            .ok_or_else(|| BlipError::WorkspaceNotFound(workspace.name.clone()))
+        Ok(())
+    }
+
+    pub fn create_workspace(&mut self, workspace: &NewWorkspace) -> Result<Workspace, BlipError> {
+        let tx = self.conn.transaction()?;
+
+        if Self::get_workspace_from(&tx, &workspace.name)?.is_some() {
+            return Err(BlipError::WorkspaceAlreadyExists(workspace.name.clone()));
+        }
+
+        Self::insert_workspace(&tx, workspace, false)?;
+        let created = Self::get_workspace_from(&tx, &workspace.name)?
+            .ok_or_else(|| BlipError::WorkspaceNotFound(workspace.name.clone()))?;
+
+        tx.commit()?;
+        Ok(created)
     }
 
     pub fn list_workspaces(&self) -> Result<Vec<Workspace>, BlipError> {
@@ -104,7 +145,11 @@ impl BlipStore {
     }
 
     pub fn get_workspace(&self, name: &str) -> Result<Option<Workspace>, BlipError> {
-        self.conn
+        Self::get_workspace_from(&self.conn, name)
+    }
+
+    fn get_workspace_from(conn: &Connection, name: &str) -> Result<Option<Workspace>, BlipError> {
+        conn
             .query_row(
                 "SELECT name, description, color, agent_access, sticky_capture, retention_days, created_at
                  FROM workspaces WHERE name = ?1",
@@ -125,13 +170,16 @@ impl BlipStore {
             .map_err(BlipError::from)
     }
 
-    pub fn set_active_workspace(&self, name: &str) -> Result<(), BlipError> {
-        if self.get_workspace(name)?.is_none() {
+    pub fn set_active_workspace(&mut self, name: &str) -> Result<(), BlipError> {
+        let tx = self.conn.transaction()?;
+
+        if Self::get_workspace_from(&tx, name)?.is_none() {
             return Err(BlipError::WorkspaceNotFound(name.to_owned()));
         }
 
-        self.ensure_active_workspace(name)?;
-        self.insert_audit_event(
+        Self::ensure_active_workspace(&tx, name)?;
+        Self::insert_audit_event(
+            &tx,
             ActorType::User,
             None,
             AuditEventType::WorkspaceActivated,
@@ -139,22 +187,29 @@ impl BlipStore {
             Some(name.to_owned()),
             None,
         )?;
+
+        tx.commit()?;
         Ok(())
     }
 
     pub fn get_active_workspace(&self) -> Result<Option<String>, BlipError> {
-        self.conn
-            .query_row(
-                "SELECT value FROM app_state WHERE key = 'active_workspace'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(BlipError::from)
+        Self::get_active_workspace_from(&self.conn)
     }
 
-    pub fn insert_blip(&self, new_blip: &NewBlip) -> Result<Blip, BlipError> {
-        if self.get_workspace(&new_blip.workspace_name)?.is_none() {
+    fn get_active_workspace_from(conn: &Connection) -> Result<Option<String>, BlipError> {
+        conn.query_row(
+            "SELECT value FROM app_state WHERE key = 'active_workspace'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(BlipError::from)
+    }
+
+    pub fn insert_blip(&mut self, new_blip: &NewBlip) -> Result<Blip, BlipError> {
+        let tx = self.conn.transaction()?;
+
+        if Self::get_workspace_from(&tx, &new_blip.workspace_name)?.is_none() {
             return Err(BlipError::WorkspaceNotFound(
                 new_blip.workspace_name.clone(),
             ));
@@ -165,7 +220,7 @@ impl BlipStore {
         let tags_json = serde_json::to_string(&new_blip.tags)?;
         let size_bytes = new_blip.content.len() as i64;
 
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO blips (
                 id, workspace_name, source_app, content_type, language, content, size_bytes,
                 token_estimate, is_redacted, tags_json, created_at
@@ -185,7 +240,8 @@ impl BlipStore {
             ],
         )?;
 
-        self.insert_audit_event(
+        Self::insert_audit_event(
+            &tx,
             ActorType::System,
             None,
             AuditEventType::BlipIngested,
@@ -194,21 +250,30 @@ impl BlipStore {
             None,
         )?;
 
-        self.get_blip(&id)?
-            .ok_or_else(|| BlipError::Database(rusqlite::Error::QueryReturnedNoRows))
+        let blip = Self::get_blip_from(&tx, &id)?
+            .ok_or_else(|| BlipError::Database(rusqlite::Error::QueryReturnedNoRows))?;
+
+        tx.commit()?;
+        Ok(blip)
     }
 
     pub fn get_blip(&self, id: &str) -> Result<Option<Blip>, BlipError> {
-        self.conn
-            .query_row(
-                "SELECT id, workspace_name, source_app, content_type, language, content, size_bytes,
-                        token_estimate, is_redacted, tags_json, created_at
-                 FROM blips WHERE id = ?1",
-                [id],
-                map_blip_row,
-            )
-            .optional()
-            .map_err(BlipError::from)
+        Self::get_blip_from(&self.conn, id)
+    }
+
+    fn get_blip_from(conn: &Connection, id: &str) -> Result<Option<Blip>, BlipError> {
+        let mut stmt = conn.prepare(
+            "SELECT id, workspace_name, source_app, content_type, language, content, size_bytes,
+                    token_estimate, is_redacted, tags_json, created_at
+             FROM blips WHERE id = ?1",
+        )?;
+
+        let mut rows = stmt.query([id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+
+        Ok(Some(map_blip_row(row)?))
     }
 
     pub fn list_blips(&self, workspace_name: &str) -> Result<Vec<Blip>, BlipError> {
@@ -224,16 +289,18 @@ impl BlipStore {
              ORDER BY created_at DESC",
         )?;
 
-        let rows = stmt.query_map([workspace_name], map_blip_row)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(BlipError::from)
-    }
+        let mut rows = stmt.query([workspace_name])?;
+        let mut blips = Vec::new();
 
-    fn create_workspace_if_missing(&self, workspace: &NewWorkspace) -> Result<bool, BlipError> {
-        self.insert_workspace(workspace, true)
+        while let Some(row) = rows.next()? {
+            blips.push(map_blip_row(row)?);
+        }
+
+        Ok(blips)
     }
 
     fn insert_workspace(
-        &self,
+        conn: &Connection,
         workspace: &NewWorkspace,
         ignore_if_exists: bool,
     ) -> Result<bool, BlipError> {
@@ -247,7 +314,7 @@ impl BlipStore {
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
         };
 
-        let affected_rows = self.conn.execute(
+        let affected_rows = conn.execute(
             statement,
             params![
                 workspace.name,
@@ -261,7 +328,8 @@ impl BlipStore {
         )?;
 
         if affected_rows > 0 {
-            self.insert_audit_event(
+            Self::insert_audit_event(
+                conn,
                 ActorType::System,
                 None,
                 AuditEventType::WorkspaceCreated,
@@ -274,8 +342,8 @@ impl BlipStore {
         Ok(affected_rows > 0)
     }
 
-    fn ensure_active_workspace(&self, workspace_name: &str) -> Result<(), BlipError> {
-        self.conn.execute(
+    fn ensure_active_workspace(conn: &Connection, workspace_name: &str) -> Result<(), BlipError> {
+        conn.execute(
             "INSERT INTO app_state(key, value)
              VALUES('active_workspace', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -285,7 +353,7 @@ impl BlipStore {
     }
 
     fn insert_audit_event(
-        &self,
+        conn: &Connection,
         actor_type: ActorType,
         actor_id: Option<String>,
         event_type: AuditEventType,
@@ -293,7 +361,7 @@ impl BlipStore {
         target_workspace: Option<String>,
         details_json: Option<String>,
     ) -> Result<(), BlipError> {
-        self.conn.execute(
+        conn.execute(
             "INSERT INTO audit_events (
                 id, actor_type, actor_id, event_type, target_blip_id, target_workspace, details_json, created_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -317,33 +385,35 @@ impl BlipStore {
              FROM audit_events ORDER BY created_at DESC",
         )?;
 
-        let rows = stmt.query_map([], |row| {
-            Ok(AuditEvent {
+        let mut rows = stmt.query([])?;
+        let mut events = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            events.push(AuditEvent {
                 id: row.get(0)?,
-                actor_type: parse_actor_type(&row.get::<_, String>(1)?)?,
+                actor_type: ActorType::parse(row.get::<_, String>(1)?.as_str())?,
                 actor_id: row.get(2)?,
-                event_type: parse_audit_event_type(&row.get::<_, String>(3)?)?,
+                event_type: AuditEventType::parse(row.get::<_, String>(3)?.as_str())?,
                 target_blip_id: row.get(4)?,
                 target_workspace: row.get(5)?,
                 details_json: row.get(6)?,
                 created_at: row.get(7)?,
-            })
-        })?;
+            });
+        }
 
-        rows.collect::<Result<Vec<_>, _>>().map_err(BlipError::from)
+        Ok(events)
     }
 }
 
-fn map_blip_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Blip> {
+fn map_blip_row(row: &rusqlite::Row<'_>) -> Result<Blip, BlipError> {
     let tags_json: String = row.get(9)?;
-    let tags = serde_json::from_str(&tags_json)
-        .map_err(|error| conversion_error(9, format!("invalid tags_json payload: {error}")))?;
+    let tags = serde_json::from_str(&tags_json)?;
 
     Ok(Blip {
         id: row.get(0)?,
         workspace_name: row.get(1)?,
         source_app: row.get(2)?,
-        content_type: ContentType::parse(row.get::<_, String>(3)?.as_str()),
+        content_type: ContentType::parse(row.get::<_, String>(3)?.as_str())?,
         language: row.get(4)?,
         content: row.get(5)?,
         size_bytes: row.get(6)?,
@@ -352,48 +422,6 @@ fn map_blip_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Blip> {
         tags,
         created_at: row.get::<_, DateTime<Utc>>(10)?,
     })
-}
-
-fn parse_actor_type(value: &str) -> rusqlite::Result<ActorType> {
-    match value {
-        "system" => Ok(ActorType::System),
-        "user" => Ok(ActorType::User),
-        "agent" => Ok(ActorType::Agent),
-        _ => Err(conversion_error(
-            1,
-            format!("invalid actor_type value `{value}`"),
-        )),
-    }
-}
-
-fn parse_audit_event_type(value: &str) -> rusqlite::Result<AuditEventType> {
-    match value {
-        "schema_initialized" => Ok(AuditEventType::SchemaInitialized),
-        "workspace_created" => Ok(AuditEventType::WorkspaceCreated),
-        "workspace_activated" => Ok(AuditEventType::WorkspaceActivated),
-        "blip_ingested" => Ok(AuditEventType::BlipIngested),
-        "blip_moved" => Ok(AuditEventType::BlipMoved),
-        _ => Err(conversion_error(
-            3,
-            format!("invalid event_type value `{value}`"),
-        )),
-    }
-}
-
-fn conversion_error(column: usize, message: String) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        column,
-        Type::Text,
-        Box::new(io::Error::new(io::ErrorKind::InvalidData, message)),
-    )
-}
-
-fn is_unique_constraint(error: &BlipError) -> bool {
-    matches!(
-        error,
-        BlipError::Database(rusqlite::Error::SqliteFailure(failure, _))
-            if failure.code == ErrorCode::ConstraintViolation
-    )
 }
 
 #[cfg(test)]
@@ -418,11 +446,34 @@ mod tests {
             .filter(|event| event.event_type == AuditEventType::SchemaInitialized)
             .count();
         assert_eq!(schema_init_count, 1);
+
+        let schema_version = store
+            .connection()
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i32>(0))
+            .expect("schema version should be readable");
+        assert_eq!(schema_version, 1);
+    }
+
+    #[test]
+    fn connection_enforces_foreign_keys() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+
+        let error = store
+            .connection()
+            .execute(
+                "INSERT INTO blips (
+                    id, workspace_name, content_type, content, size_bytes, tags_json, created_at
+                 ) VALUES ('missing-workspace', 'missing', 'plain_text', 'broken', 6, '[]', ?1)",
+                [Utc::now()],
+            )
+            .expect_err("foreign key should reject missing workspace");
+
+        assert!(matches!(error, rusqlite::Error::SqliteFailure(_, Some(_))));
     }
 
     #[test]
     fn creates_workspace_and_blip() {
-        let store = BlipStore::in_memory().expect("store should initialize");
+        let mut store = BlipStore::in_memory().expect("store should initialize");
         store
             .create_workspace(&NewWorkspace {
                 name: "auth-bug".into(),
@@ -456,7 +507,7 @@ mod tests {
 
     #[test]
     fn duplicate_workspace_creation_returns_error() {
-        let store = BlipStore::in_memory().expect("store should initialize");
+        let mut store = BlipStore::in_memory().expect("store should initialize");
         let workspace = NewWorkspace {
             name: "demo".into(),
             description: Some("First".into()),
@@ -478,32 +529,72 @@ mod tests {
     }
 
     #[test]
-    fn invalid_tags_json_returns_an_error() {
+    fn blip_insert_rolls_back_when_audit_fails() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&NewWorkspace {
+                name: "rollback".into(),
+                description: None,
+                color: None,
+                agent_access: false,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should be created");
+
+        store
+            .connection()
+            .execute("DROP TABLE audit_events", [])
+            .expect("test should remove audit table");
+
+        let error = store
+            .insert_blip(&NewBlip {
+                workspace_name: "rollback".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "should not persist".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect_err("audit failure should abort the write");
+
+        assert!(matches!(error, BlipError::Database(_)));
+        let blips = store
+            .list_blips("rollback")
+            .expect("blip query should still work");
+        assert!(blips.is_empty());
+    }
+
+    #[test]
+    fn invalid_persisted_blip_tags_return_error() {
         let store = BlipStore::in_memory().expect("store should initialize");
+
         store
             .connection()
             .execute(
                 "INSERT INTO blips (
-                    id, workspace_name, source_app, content_type, language, content, size_bytes,
-                    token_estimate, is_redacted, tags_json, created_at
-                 ) VALUES (?1, 'inbox', NULL, 'plain_text', NULL, 'payload', 7, NULL, 0, ?2, ?3)",
-                params!["bad-tags", "{not-json", Utc::now()],
+                    id, workspace_name, content_type, content, size_bytes, tags_json, created_at
+                 ) VALUES ('bad-tags', 'inbox', 'plain_text', 'broken', 6, 'not-json', ?1)",
+                [Utc::now()],
             )
-            .expect("seed insert should succeed");
+            .expect("test row should insert");
 
         let error = store
             .get_blip("bad-tags")
-            .expect_err("invalid tags should fail to decode");
+            .expect_err("invalid persisted JSON should surface");
 
-        assert!(matches!(
-            error,
-            BlipError::Database(rusqlite::Error::FromSqlConversionFailure(_, _, _))
-        ));
+        assert!(matches!(error, BlipError::Serialization(_)));
     }
 
     #[test]
     fn invalid_audit_event_type_returns_an_error() {
         let store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .connection()
+            .execute("PRAGMA ignore_check_constraints = ON", [])
+            .expect("test should bypass check constraints");
         store
             .connection()
             .execute(
@@ -520,13 +611,16 @@ mod tests {
 
         assert!(matches!(
             error,
-            BlipError::Database(rusqlite::Error::FromSqlConversionFailure(_, _, _))
+            BlipError::InvalidPersistedValue {
+                field: "event_type",
+                ..
+            }
         ));
     }
 
     #[test]
     fn missing_inbox_backfill_does_not_emit_schema_initialized_again() {
-        let store = BlipStore::in_memory().expect("store should initialize");
+        let mut store = BlipStore::in_memory().expect("store should initialize");
         let schema_init_before = store
             .list_audit_events()
             .expect("audit list should work")

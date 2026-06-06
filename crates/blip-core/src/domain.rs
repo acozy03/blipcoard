@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::BlipError;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContentType {
     PlainText,
@@ -27,16 +29,20 @@ impl ContentType {
         }
     }
 
-    pub fn parse(value: &str) -> Self {
+    pub fn parse(value: &str) -> Result<Self, BlipError> {
         match value {
-            "plain_text" => Self::PlainText,
-            "code" => Self::Code,
-            "diff" => Self::Diff,
-            "json" => Self::Json,
-            "url" => Self::Url,
-            "stack_trace" => Self::StackTrace,
-            "log" => Self::Log,
-            _ => Self::Unknown,
+            "plain_text" => Ok(Self::PlainText),
+            "code" => Ok(Self::Code),
+            "diff" => Ok(Self::Diff),
+            "json" => Ok(Self::Json),
+            "url" => Ok(Self::Url),
+            "stack_trace" => Ok(Self::StackTrace),
+            "log" => Ok(Self::Log),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(BlipError::InvalidPersistedValue {
+                field: "content_type",
+                value: value.to_owned(),
+            }),
         }
     }
 }
@@ -105,12 +111,15 @@ impl ActorType {
         }
     }
 
-    pub fn parse(value: &str) -> Self {
+    pub fn parse(value: &str) -> Result<Self, BlipError> {
         match value {
-            "system" => Self::System,
-            "user" => Self::User,
-            "agent" => Self::Agent,
-            _ => Self::System,
+            "system" => Ok(Self::System),
+            "user" => Ok(Self::User),
+            "agent" => Ok(Self::Agent),
+            _ => Err(BlipError::InvalidPersistedValue {
+                field: "actor_type",
+                value: value.to_owned(),
+            }),
         }
     }
 }
@@ -135,14 +144,17 @@ impl AuditEventType {
         }
     }
 
-    pub fn parse(value: &str) -> Self {
+    pub fn parse(value: &str) -> Result<Self, BlipError> {
         match value {
-            "schema_initialized" => Self::SchemaInitialized,
-            "workspace_created" => Self::WorkspaceCreated,
-            "workspace_activated" => Self::WorkspaceActivated,
-            "blip_ingested" => Self::BlipIngested,
-            "blip_moved" => Self::BlipMoved,
-            _ => Self::SchemaInitialized,
+            "schema_initialized" => Ok(Self::SchemaInitialized),
+            "workspace_created" => Ok(Self::WorkspaceCreated),
+            "workspace_activated" => Ok(Self::WorkspaceActivated),
+            "blip_ingested" => Ok(Self::BlipIngested),
+            "blip_moved" => Ok(Self::BlipMoved),
+            _ => Err(BlipError::InvalidPersistedValue {
+                field: "event_type",
+                value: value.to_owned(),
+            }),
         }
     }
 }

@@ -8,6 +8,9 @@ pub enum BlipError {
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
+    #[error("invalid persisted value for {field}: {value}")]
+    InvalidPersistedValue { field: &'static str, value: String },
+
     #[error("workspace `{0}` does not exist")]
     WorkspaceNotFound(String),
 

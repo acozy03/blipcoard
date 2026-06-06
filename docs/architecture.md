@@ -62,7 +62,12 @@ CLI client responsible for:
 - searching history
 - scripting and shell integration
 
-The CLI should be a client of `blipd`, not a separate clipboard manager.
+During early storage and ingestion work, the CLI may call `blip-core` directly for
+bootstrap commands that only read or mutate the local store. Once `blipd` exposes
+the local API needed by a command, that command should move behind the daemon so
+policy enforcement and audit behavior remain centralized.
+
+The CLI should never become a second clipboard watcher or policy engine.
 
 Bootstrap note:
 
@@ -173,6 +178,31 @@ Optional policy features:
 - sticky workspace mode
 - retention windows per workspace
 - lock specific workspaces from agent access
+
+## Runtime Ownership
+
+The simplest architecture that preserves the user experience is:
+
+- `blip-core` owns durable domain and storage rules
+- `blip-clipboard` owns platform-specific clipboard observation
+- `blipd` owns long-running ingestion, routing, policy, and future IPC/API access
+- `blip` owns terminal interaction and should stay thin
+- the desktop app owns visual interaction and should use the same daemon API as
+  other non-bootstrap clients
+
+This keeps Phase 2 focused: build reliable daemon-owned clipboard ingestion into
+`inbox` before introducing a broader API surface. Avoid adding direct clipboard
+watching to the CLI or desktop app.
+
+## Persistence Rules
+
+The local store should favor boring, recoverable behavior:
+
+- schema changes go through numbered migrations
+- multi-row writes use a transaction
+- audit entries commit with the state change they describe
+- invalid persisted enum or JSON values are surfaced as errors
+- platform paths should be handled as paths, not lossy strings
 
 ## Data Flow
 

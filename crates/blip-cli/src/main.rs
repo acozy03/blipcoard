@@ -41,7 +41,7 @@ enum Commands {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let config = BlipConfig::load_or_create()?;
-    let store = BlipStore::open(config.database_path.to_string_lossy().as_ref())?;
+    let mut store = BlipStore::open(&config.database_path)?;
 
     match cli.command {
         Commands::Current => {
