@@ -10,16 +10,18 @@ use blip_core::{BlipError, BlipStore, ContentType, NewBlip};
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const PENDING_SOURCE_INTERVAL: Duration = Duration::from_secs(1);
+const DUPLICATE_SUPPRESSION_WINDOW: Duration = Duration::from_secs(2);
 const INBOX_WORKSPACE: &str = "inbox";
 
 pub struct DaemonRuntime<S> {
     database_path: PathBuf,
     store: BlipStore,
     source: S,
+    duplicate_suppression: DuplicateSuppression,
 }
 
 impl<S> DaemonRuntime<S>
@@ -31,6 +33,21 @@ where
             database_path: database_path.as_ref().to_owned(),
             store,
             source,
+            duplicate_suppression: DuplicateSuppression::new(DUPLICATE_SUPPRESSION_WINDOW),
+        }
+    }
+
+    pub fn with_duplicate_suppression_window(
+        database_path: impl AsRef<Path>,
+        store: BlipStore,
+        source: S,
+        duplicate_suppression_window: Duration,
+    ) -> Self {
+        Self {
+            database_path: database_path.as_ref().to_owned(),
+            store,
+            source,
+            duplicate_suppression: DuplicateSuppression::new(duplicate_suppression_window),
         }
     }
 
@@ -49,21 +66,66 @@ where
             match self.source.wait_for_next()? {
                 RuntimeEvent::Idle => {}
                 RuntimeEvent::ClipboardTextChanged { text } => {
-                    self.store.insert_blip(&NewBlip {
-                        workspace_name: INBOX_WORKSPACE.to_owned(),
-                        source_app: None,
-                        content_type: ContentType::PlainText,
-                        language: None,
-                        content: text,
-                        token_estimate: None,
-                        is_redacted: false,
-                        tags: Vec::new(),
-                    })?;
+                    self.ingest_clipboard_text(text)?;
                 }
                 RuntimeEvent::Shutdown => return Ok(()),
             }
         }
     }
+
+    fn ingest_clipboard_text(&mut self, text: String) -> Result<(), DaemonError> {
+        let observed_at = Instant::now();
+        if self
+            .duplicate_suppression
+            .should_suppress(&text, observed_at)
+        {
+            return Ok(());
+        }
+
+        self.store.insert_blip(&NewBlip {
+            workspace_name: INBOX_WORKSPACE.to_owned(),
+            source_app: None,
+            content_type: ContentType::PlainText,
+            language: None,
+            content: text.clone(),
+            token_estimate: None,
+            is_redacted: false,
+            tags: Vec::new(),
+        })?;
+        self.duplicate_suppression
+            .record_ingested(text, observed_at);
+
+        Ok(())
+    }
+}
+
+struct DuplicateSuppression {
+    window: Duration,
+    last_ingested: Option<IngestedClipboardText>,
+}
+
+impl DuplicateSuppression {
+    fn new(window: Duration) -> Self {
+        Self {
+            window,
+            last_ingested: None,
+        }
+    }
+
+    fn should_suppress(&self, text: &str, observed_at: Instant) -> bool {
+        self.last_ingested.as_ref().is_some_and(|last| {
+            last.text == text && observed_at.duration_since(last.observed_at) <= self.window
+        })
+    }
+
+    fn record_ingested(&mut self, text: String, observed_at: Instant) {
+        self.last_ingested = Some(IngestedClipboardText { text, observed_at });
+    }
+}
+
+struct IngestedClipboardText {
+    text: String,
+    observed_at: Instant,
 }
 
 pub trait IngestionSource {
@@ -254,5 +316,63 @@ mod tests {
                 && event.target_blip_id.as_deref() == Some(blips[0].id.as_str())
                 && event.target_workspace.as_deref() == Some("inbox")
         }));
+    }
+
+    #[test]
+    fn runtime_suppresses_repeated_identical_clipboard_text_within_window() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let source = ScriptedIngestionSource {
+            events: vec![
+                RuntimeEvent::Shutdown,
+                RuntimeEvent::ClipboardTextChanged {
+                    text: "same text".to_owned(),
+                },
+                RuntimeEvent::ClipboardTextChanged {
+                    text: "same text".to_owned(),
+                },
+            ],
+            calls: 0,
+        };
+        let mut runtime = DaemonRuntime::with_duplicate_suppression_window(
+            "/tmp/blipcoard-test.db",
+            store,
+            source,
+            Duration::MAX,
+        );
+
+        runtime
+            .run()
+            .expect("runtime should suppress duplicate clipboard text");
+
+        let blips = runtime
+            .store
+            .list_blips("inbox")
+            .expect("inbox blips should be listed");
+        assert_eq!(blips.len(), 1);
+        assert_eq!(blips[0].content, "same text");
+
+        let ingested_audit_events = runtime
+            .store
+            .list_audit_events()
+            .expect("audit events should be listed")
+            .into_iter()
+            .filter(|event| event.event_type == blip_core::AuditEventType::BlipIngested)
+            .count();
+        assert_eq!(ingested_audit_events, 1);
+    }
+
+    #[test]
+    fn duplicate_suppression_uses_identical_text_and_time_window() {
+        let mut suppression = DuplicateSuppression::new(Duration::from_secs(2));
+        let observed_at = Instant::now();
+
+        assert!(!suppression.should_suppress("copied text", observed_at));
+        suppression.record_ingested("copied text".to_owned(), observed_at);
+
+        assert!(suppression.should_suppress("copied text", observed_at + Duration::from_secs(1)));
+        assert!(
+            !suppression.should_suppress("different text", observed_at + Duration::from_secs(1))
+        );
+        assert!(!suppression.should_suppress("copied text", observed_at + Duration::from_secs(3)));
     }
 }
