@@ -12,6 +12,8 @@ The system should:
 - let agents read only the workspace explicitly attached to their session
 - support desktop and CLI workflows equally well
 - remain fully local-first and auditable
+- eventually support rich clipboard payloads, such as screenshots, images, file
+  lists, HTML, and RTF, without uploading content to third-party services
 
 ## Product Model
 
@@ -208,6 +210,8 @@ The local store should favor boring, recoverable behavior:
   projections, with full clipboard content fetched explicitly by id
 - phase 2 should move ordinary runtime writes behind `blipd` so concurrent
   clients do not become independent SQLite writers
+- phase 8 should store binary clipboard payloads as local blobs referenced by
+  SQLite metadata, not as large base64 strings in text columns
 
 ## Data Flow
 
@@ -219,6 +223,10 @@ The local store should favor boring, recoverable behavior:
 6. CLI or desktop sets active workspace.
 7. Agent tools query only that workspace.
 
+Phase 2 is intentionally text-first. Non-text clipboard contents should be
+reported as unsupported or no readable text until phase 8 adds typed rich
+payloads, durable blob storage, previews, and access policy.
+
 Phase 1 bootstrap flow:
 
 1. User runs the CLI locally.
@@ -228,6 +236,74 @@ Phase 1 bootstrap flow:
 
 This bootstrap path exists only to validate the storage and domain model before
 phase 2 introduces the real daemon ingestion boundary.
+
+## Rich Clipboard Content
+
+Phase 8 extends the text-first model to clipboard payloads that are not safely or
+usefully represented as `String` content.
+
+Payload categories:
+
+- text: plain text and text-like classified content
+- image: screenshots and copied image data, such as PNG, JPEG, TIFF, or platform
+  bitmap formats
+- file list: copied file references from file managers or drag/copy workflows
+- rich text: HTML and RTF with plain-text fallback
+- unknown: platform formats that can be observed but not decoded yet
+
+The product should model the clipboard payload independently from the storage
+mechanism. A future payload API should look conceptually like:
+
+- text payloads carry inline UTF-8 content
+- image payloads carry MIME type, dimensions, byte size, hash, and blob reference
+- file-list payloads carry path metadata and capture policy, not eagerly copied
+  file bytes by default
+- rich-text payloads carry sanitized metadata plus a plain-text fallback
+- unknown payloads carry platform format identifiers and byte-size metadata when
+  available
+
+Storage rules for rich payloads:
+
+- keep searchable and listable metadata in SQLite
+- keep binary bytes in a local blob store under the configured data directory
+- use content hashes for dedupe and integrity checks
+- make blob writes recoverable if the daemon crashes between file and SQLite
+  updates
+- garbage collect unreferenced blobs after retention or explicit deletion
+- never store large binary payloads as base64 in `Blip.content`
+
+Preview rules:
+
+- list views should show lightweight metadata and bounded previews only
+- image thumbnails should be generated locally and size-limited
+- desktop preview rendering must not execute untrusted HTML
+- CLI output should never dump binary data by default
+- raw payload reads should require an explicit id-based command or API request
+
+Policy rules:
+
+- rich payload capture should be configurable by payload type
+- screenshots and images should be treated as sensitive by default
+- agents should not receive raw binary payloads unless workspace policy allows it
+- thumbnail reads, raw payload exports, and agent payload reads should be audited
+- deletion must remove both SQLite records and blob data when no other blip
+  references the same blob
+
+Platform notes:
+
+- macOS screenshot clipboard support should account for pasteboard image types
+- Linux support should account for X11 and Wayland differences
+- Windows support should account for bitmap and file-drop clipboard formats
+- every platform reader should expose capabilities so the daemon can explain why
+  a payload type was ignored or unsupported
+
+Non-goals for phase 8:
+
+- OCR as a requirement for image ingestion
+- cloud upload, remote thumbnailing, or remote media analysis
+- importing copied files automatically when the clipboard only contains file
+  references
+- allowing the CLI or desktop app to watch the clipboard directly
 
 ## Core Domain Objects
 
@@ -248,6 +324,18 @@ Suggested fields:
 - `token_estimate`
 - `is_redacted`
 - `tags`
+
+Future rich payload fields:
+
+- `payload_kind`
+- `mime_type`
+- `blob_ref`
+- `content_hash`
+- `preview_ref`
+- `width`
+- `height`
+- `platform_format`
+- `capture_policy`
 
 ### `Workspace`
 

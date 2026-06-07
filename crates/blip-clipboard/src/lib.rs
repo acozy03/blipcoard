@@ -27,6 +27,7 @@ impl fmt::Display for ClipboardPlatform {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardWatcherConfig {
+    /// Delay between polls for polling-based watchers.
     pub poll_interval: Duration,
 }
 
@@ -40,6 +41,7 @@ impl Default for ClipboardWatcherConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardEvent {
+    /// Text observed from the clipboard.
     pub text: String,
 }
 
@@ -56,14 +58,24 @@ pub enum ClipboardError {
 }
 
 pub trait ClipboardReader {
+    /// Reads the current clipboard text.
+    ///
+    /// `Ok(None)` means the clipboard currently has no readable text, such as
+    /// after being cleared or when it contains non-text content.
     fn read_text(&mut self) -> Result<Option<String>, ClipboardError>;
 }
 
 pub trait ClipboardWatcher {
+    /// Returns the next observed clipboard event when one is available.
     fn poll_next(&mut self) -> Result<Option<ClipboardEvent>, ClipboardError>;
-    fn poll_interval(&self) -> Duration;
 }
 
+/// Polling watcher that emits text changes observed through a [`ClipboardReader`].
+///
+/// Duplicate suppression is based on the last readable text value. A `None` read
+/// resets that state, so the same text is emitted again if it reappears. This
+/// does not detect consecutive copies of identical text unless a future platform
+/// reader exposes those copies as distinct readable states.
 #[derive(Debug)]
 pub struct PollingClipboardWatcher<R> {
     reader: R,
@@ -82,6 +94,10 @@ where
             last_text: None,
         }
     }
+
+    pub fn poll_interval(&self) -> Duration {
+        self.poll_interval
+    }
 }
 
 impl<R> ClipboardWatcher for PollingClipboardWatcher<R>
@@ -90,6 +106,7 @@ where
 {
     fn poll_next(&mut self) -> Result<Option<ClipboardEvent>, ClipboardError> {
         let Some(text) = self.reader.read_text()? else {
+            self.last_text = None;
             return Ok(None);
         };
 
@@ -99,10 +116,6 @@ where
 
         self.last_text = Some(text.clone());
         Ok(Some(ClipboardEvent { text }))
-    }
-
-    fn poll_interval(&self) -> Duration {
-        self.poll_interval
     }
 }
 
@@ -118,101 +131,55 @@ pub fn current_platform() -> ClipboardPlatform {
     }
 }
 
-pub fn watcher_strategy_hint() -> &'static str {
-    match current_platform() {
-        ClipboardPlatform::Linux => "linux clipboard watcher pending: x11/wayland abstraction",
-        ClipboardPlatform::MacOs => "macos clipboard watcher pending: pasteboard integration",
-        ClipboardPlatform::Windows => "windows clipboard watcher pending: win32 listener",
-        ClipboardPlatform::Unknown => "unsupported platform",
-    }
-}
-
 pub fn system_watcher(
     config: ClipboardWatcherConfig,
-) -> Result<PollingClipboardWatcher<PlatformClipboardReader>, ClipboardError> {
+) -> Result<impl ClipboardWatcher, ClipboardError> {
     Ok(PollingClipboardWatcher::new(
         PlatformClipboardReader::new()?,
         config,
     ))
 }
 
-#[cfg(target_os = "linux")]
-mod platform {
-    use super::{ClipboardError, ClipboardPlatform};
+#[derive(Debug)]
+struct PlatformClipboardReader;
 
-    #[derive(Debug, Default)]
-    pub struct PlatformClipboardReader;
-
-    impl PlatformClipboardReader {
-        pub fn new() -> Result<Self, ClipboardError> {
-            Err(ClipboardError::Unavailable {
-                platform: ClipboardPlatform::Linux,
-                reason: "x11/wayland clipboard reader is not implemented yet",
-            })
-        }
+impl PlatformClipboardReader {
+    fn new() -> Result<Self, ClipboardError> {
+        Err(platform_unavailable_error())
     }
 }
-
-#[cfg(target_os = "macos")]
-mod platform {
-    use super::{ClipboardError, ClipboardPlatform};
-
-    #[derive(Debug, Default)]
-    pub struct PlatformClipboardReader;
-
-    impl PlatformClipboardReader {
-        pub fn new() -> Result<Self, ClipboardError> {
-            Err(ClipboardError::Unavailable {
-                platform: ClipboardPlatform::MacOs,
-                reason: "pasteboard clipboard reader is not implemented yet",
-            })
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-mod platform {
-    use super::{ClipboardError, ClipboardPlatform};
-
-    #[derive(Debug, Default)]
-    pub struct PlatformClipboardReader;
-
-    impl PlatformClipboardReader {
-        pub fn new() -> Result<Self, ClipboardError> {
-            Err(ClipboardError::Unavailable {
-                platform: ClipboardPlatform::Windows,
-                reason: "win32 clipboard reader is not implemented yet",
-            })
-        }
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-mod platform {
-    use super::{ClipboardError, ClipboardPlatform};
-
-    #[derive(Debug, Default)]
-    pub struct PlatformClipboardReader;
-
-    impl PlatformClipboardReader {
-        pub fn new() -> Result<Self, ClipboardError> {
-            Err(ClipboardError::Unavailable {
-                platform: ClipboardPlatform::Unknown,
-                reason: "this target does not have a supported clipboard backend",
-            })
-        }
-    }
-}
-
-pub use platform::PlatformClipboardReader;
 
 impl ClipboardReader for PlatformClipboardReader {
     fn read_text(&mut self) -> Result<Option<String>, ClipboardError> {
-        Err(ClipboardError::Unavailable {
-            platform: current_platform(),
-            reason: watcher_strategy_hint(),
-        })
+        Err(platform_unavailable_error())
     }
+}
+
+fn platform_unavailable_error() -> ClipboardError {
+    ClipboardError::Unavailable {
+        platform: current_platform(),
+        reason: platform_unavailable_reason(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn platform_unavailable_reason() -> &'static str {
+    "x11/wayland clipboard reader is not implemented yet"
+}
+
+#[cfg(target_os = "macos")]
+fn platform_unavailable_reason() -> &'static str {
+    "pasteboard clipboard reader is not implemented yet"
+}
+
+#[cfg(target_os = "windows")]
+fn platform_unavailable_reason() -> &'static str {
+    "win32 clipboard reader is not implemented yet"
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn platform_unavailable_reason() -> &'static str {
+    "this target does not have a supported clipboard backend"
 }
 
 #[cfg(test)]
@@ -258,6 +225,29 @@ mod tests {
     }
 
     #[test]
+    fn polling_watcher_treats_absent_text_as_state_change() {
+        let reader = StubClipboardReader {
+            reads: vec![Some("first"), None, Some("first")],
+            index: 0,
+        };
+        let mut watcher = PollingClipboardWatcher::new(reader, ClipboardWatcherConfig::default());
+
+        assert_eq!(
+            watcher.poll_next().expect("poll should succeed"),
+            Some(ClipboardEvent {
+                text: "first".to_string(),
+            })
+        );
+        assert_eq!(watcher.poll_next().expect("poll should succeed"), None);
+        assert_eq!(
+            watcher.poll_next().expect("poll should succeed"),
+            Some(ClipboardEvent {
+                text: "first".to_string(),
+            })
+        );
+    }
+
+    #[test]
     fn polling_watcher_preserves_configured_interval() {
         let watcher = PollingClipboardWatcher::new(
             StubClipboardReader {
@@ -274,8 +264,10 @@ mod tests {
 
     #[test]
     fn system_watcher_returns_clear_platform_error() {
-        let error = system_watcher(ClipboardWatcherConfig::default())
-            .expect_err("platform backend should remain explicit until implemented");
+        let error = match system_watcher(ClipboardWatcherConfig::default()) {
+            Ok(_) => panic!("platform backend should remain explicit until implemented"),
+            Err(error) => error,
+        };
 
         match error {
             ClipboardError::Unavailable { platform, reason } => {
