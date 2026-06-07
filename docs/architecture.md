@@ -52,6 +52,8 @@ Background daemon responsible for:
 - policy enforcement
 
 This is the source of truth for runtime behavior.
+The daemon API and IPC boundary is defined in
+[`daemon-api.md`](daemon-api.md).
 
 ### 2. `blip`
 
@@ -195,6 +197,10 @@ The simplest architecture that preserves the user experience is:
 This keeps Phase 2 focused: build reliable daemon-owned clipboard ingestion into
 `inbox` before introducing a broader API surface. Avoid adding direct clipboard
 watching to the CLI or desktop app.
+
+The local daemon boundary should use the shared request and response types from
+`blip-api`, with `blipd` exposing newline-delimited JSON over a user-scoped Unix
+domain socket on macOS/Linux or named pipe on Windows.
 
 ## Persistence Rules
 

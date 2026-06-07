@@ -46,6 +46,9 @@ Boundary:
 
 - `blipd` owns clipboard watching
 - `blip-clipboard` owns platform-specific observation
+- the daemon/client boundary is newline-delimited JSON over a local Unix domain
+  socket on macOS/Linux or a current-user named pipe on Windows; shared request
+  and response schemas live in `blip-api`
 - CLI commands may still use direct store access for bootstrap/admin workflows
   until the daemon API exists, but they should not watch the clipboard
 - non-text clipboard payloads, such as screenshots, copied images, files, HTML,

@@ -5,6 +5,7 @@ blipcoard/
   README.md
   docs/
     architecture.md
+    daemon-api.md
     project-breakdown.md
     mvp-phases.md
     repo-layout.md
@@ -57,6 +58,7 @@ Current state:
 ### `blip-api`
 
 - request/response models shared by daemon, CLI, and desktop app
+- schema types for the local daemon IPC boundary
 
 ### `blip-clipboard`
 
