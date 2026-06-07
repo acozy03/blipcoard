@@ -306,8 +306,8 @@ Why this is its own part:
 Subphases:
 
 1. Site scaffold and information architecture
-   - choose the docs site generator and theme, likely Docusaurus unless another
-     static docs stack proves materially better
+   - choose the docs site generator and theme, with Docusaurus as the default
+     recommendation unless another static docs stack proves materially better
    - define the sidebar and top-level navigation
    - decide what belongs in the public docs site versus raw repository Markdown
    - wire local dev preview and build commands

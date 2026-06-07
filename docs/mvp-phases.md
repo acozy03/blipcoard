@@ -185,6 +185,8 @@ Goal:
 Must have:
 
 - docs site scaffold with a maintainable sidebar and landing navigation
+- Docusaurus as the docs site generator unless a materially better option is
+  chosen during Phase 10.1
 - migration path for the existing `docs/` Markdown into the site structure
 - product overview, architecture, roadmap, and security/privacy pages
 - CLI, daemon, and developer workflow reference pages
