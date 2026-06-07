@@ -48,6 +48,9 @@ Boundary:
 - `blip-clipboard` owns platform-specific observation
 - CLI commands may still use direct store access for bootstrap/admin workflows
   until the daemon API exists, but they should not watch the clipboard
+- non-text clipboard payloads, such as screenshots, copied images, files, HTML,
+  and RTF, are out of scope for phase 2 and should be treated as unsupported or
+  no readable text until phase 8 defines the rich payload model
 
 Success condition:
 
@@ -121,3 +124,53 @@ Must have:
 Success condition:
 
 - blips are searchable, safer, and useful as agent context bundles
+
+## Phase 8: Rich clipboard content
+
+Goal:
+
+- support non-text clipboard payloads without weakening the daemon ownership,
+  workspace policy, audit trail, or local-first storage model
+
+Must have:
+
+- rich clipboard payload model for text, images, files, HTML, RTF, and unknown
+  platform formats
+- durable blob storage for screenshots, copied images, and file-like payloads
+- metadata capture for MIME type, source format, byte size, dimensions, hashes,
+  source app, and capture time
+- platform readers for screenshot/image clipboard data on macOS, Linux, and
+  Windows
+- safe thumbnail and preview generation for desktop and CLI summaries
+- export/open commands that retrieve full binary payloads only by explicit id
+- content hash dedupe and retention/garbage-collection rules for blob data
+- privacy controls for image capture, screenshot previews, and agent access to
+  rich payloads
+- migration path from text-only `Blip.content` records to typed payload records
+
+Out of scope:
+
+- optical character recognition as an ingestion requirement
+- cloud upload or remote preview services
+- automatic agent access to raw screenshots or binary payloads
+
+Success condition:
+
+- copying a screenshot or image creates an auditable inbox blip with metadata and
+  a preview, while full binary content remains locally stored and available only
+  through explicit user or policy-approved retrieval
+
+## Phase 9: Packaging and distribution
+
+Must have:
+
+- runtime-first distribution model
+- desktop bundles for macOS, Linux, and Windows
+- daemon install/start behavior
+- CLI install docs
+- upgrade and data-migration strategy
+
+Success condition:
+
+- users can install, upgrade, and run `blipcoard` without bypassing the daemon,
+  CLI, or local store ownership model

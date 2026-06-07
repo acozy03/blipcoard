@@ -64,6 +64,9 @@ Constraint:
 
 - `blipd` owns clipboard observation; the CLI and desktop app should not watch
   the clipboard directly
+- this phase is text-first; non-text payloads should remain unsupported or
+  represented as no readable text until the rich clipboard phase defines storage,
+  previews, and access policy
 
 ## Part 3: CLI as a daemon client
 
@@ -169,7 +172,103 @@ Questions answered in this phase:
 - which redactions should be automatic vs opt-in
 - what metadata is useful enough to display in UI
 
-## Part 8: Packaging and Distribution
+## Part 8: Rich Clipboard Content
+
+Goal:
+
+- make screenshots, copied images, files, and formatted clipboard payloads usable
+  as first-class blips without turning the clipboard layer into storage, policy,
+  or UI code
+
+Why this is separate from phase 2:
+
+- text clipboard ingestion can use `String` payloads and simple previews
+- screenshots and images require binary storage, thumbnails, hashing, metadata,
+  retention, and stricter privacy defaults
+- copied files and rich text formats have platform-specific clipboard semantics
+  that need deliberate API boundaries
+- agent access to binary payloads needs explicit policy because screenshots often
+  contain secrets, private messages, browser tabs, terminal output, and customer
+  data
+
+Subphases:
+
+1. Payload model and schema design
+   - replace the text-only event shape with a typed payload model
+   - represent text, image, file list, HTML, RTF, and unknown platform formats
+   - add MIME type, original platform format, size, hash, and preview metadata
+   - decide which metadata belongs in SQLite and which belongs beside blob files
+   - preserve compatibility with existing text blips during migration
+2. Blob storage and lifecycle
+   - choose a local blob directory layout under the configured data directory
+   - store binary payloads by content hash or stable blob id
+   - keep SQLite records transactional with blob writes and cleanup
+   - add retention, garbage collection, and orphan recovery behavior
+   - ensure backups and migrations can reason about blob references
+3. Platform capture
+   - detect image clipboard formats on macOS, Linux, and Windows
+   - support common screenshot flows, including clipboard screenshots and copied
+     image data from browsers/editors
+   - detect copied file lists without eagerly importing large files
+   - capture HTML/RTF as formatted payloads while preserving plain text fallback
+   - expose platform capability metadata so callers can explain unsupported types
+4. Preview and inspection
+   - generate bounded thumbnails for images and screenshots
+   - show stable summaries in CLI output without dumping binary data
+   - show image/file/rich-text previews in the desktop detail panel
+   - record width, height, MIME type, and byte size where available
+   - avoid rendering untrusted HTML directly in privileged UI contexts
+5. Policy, privacy, and agent access
+   - default rich binary payloads to no direct agent access until explicitly
+     routed or allowed by policy
+   - audit preview, export, and raw payload reads separately from list views
+   - add workspace-level controls for capturing screenshots and images
+   - add redaction hooks for screenshots without requiring OCR in this phase
+   - make accidental capture easy to delete from both SQLite and blob storage
+6. CLI, daemon API, and export
+   - add daemon APIs for metadata list, thumbnail fetch, and raw payload fetch
+   - add CLI commands to inspect metadata and export payloads by id
+   - keep full binary retrieval explicit and policy-checked
+   - make shell output predictable for non-text content
+   - ensure desktop and CLI use the same daemon API
+7. Dedupe and reliability
+   - dedupe image payloads by content hash
+   - separate repeated copy events from duplicate payload storage
+   - test crash recovery around partially written blob files
+   - test large payload limits and backpressure in the daemon loop
+   - verify behavior across supported OS clipboard implementations
+
+Deliverables:
+
+- `ClipboardPayload` or equivalent typed payload API in `blip-clipboard`
+- `blip-core` schema migration for rich payload metadata and blob references
+- blob store abstraction with tests for write, read, delete, GC, and recovery
+- platform image/screenshot detection for macOS, Linux, and Windows
+- file-list and rich-text detection with plain-text fallback
+- daemon ingestion path for rich payloads
+- desktop previews and CLI metadata/export commands
+- privacy controls, audit events, and policy checks for rich payload reads
+- migration and compatibility tests for existing text-only blips
+
+Questions answered in this phase:
+
+- which clipboard formats are first-class product surfaces
+- which rich payloads are captured by default and which require opt-in
+- how should screenshots be previewed without exposing sensitive content too
+  casually
+- how should file-list clipboard entries differ from imported file content
+- what size limits should the daemon enforce
+- how should duplicate payload storage differ from duplicate copy events
+- what metadata can be captured consistently across macOS, Linux, and Windows
+
+Non-goals:
+
+- OCR as a requirement for screenshot ingestion
+- cloud storage, cloud thumbnailing, or remote media analysis
+- making the CLI or desktop app independent clipboard watchers
+- rendering untrusted HTML as active desktop UI
+
+## Part 9: Packaging and Distribution
 
 Goal:
 
