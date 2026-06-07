@@ -49,26 +49,20 @@ where
             match self.source.wait_for_next()? {
                 RuntimeEvent::Idle => {}
                 RuntimeEvent::ClipboardTextChanged { text } => {
-                    self.ingest_clipboard_text(text)?;
+                    self.store.insert_blip(&NewBlip {
+                        workspace_name: INBOX_WORKSPACE.to_owned(),
+                        source_app: None,
+                        content_type: ContentType::PlainText,
+                        language: None,
+                        content: text,
+                        token_estimate: None,
+                        is_redacted: false,
+                        tags: Vec::new(),
+                    })?;
                 }
                 RuntimeEvent::Shutdown => return Ok(()),
             }
         }
-    }
-
-    fn ingest_clipboard_text(&mut self, text: String) -> Result<(), BlipError> {
-        self.store.insert_blip(&NewBlip {
-            workspace_name: INBOX_WORKSPACE.to_owned(),
-            source_app: None,
-            content_type: ContentType::PlainText,
-            language: None,
-            content: text,
-            token_estimate: None,
-            is_redacted: false,
-            tags: Vec::new(),
-        })?;
-
-        Ok(())
     }
 }
 
