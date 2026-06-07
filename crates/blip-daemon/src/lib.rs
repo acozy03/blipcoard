@@ -5,13 +5,16 @@
 //! policy, or process lifecycle decisions.
 
 use blip_api::HealthResponse;
-use blip_core::{BlipError, BlipStore};
+use blip_clipboard::{ClipboardError, ClipboardWatcher};
+use blip_core::{BlipError, BlipStore, ContentType, NewBlip};
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
+use thiserror::Error;
 
 const PENDING_SOURCE_INTERVAL: Duration = Duration::from_secs(1);
+const INBOX_WORKSPACE: &str = "inbox";
 
 pub struct DaemonRuntime<S> {
     database_path: PathBuf,
@@ -41,24 +44,52 @@ where
         })
     }
 
-    pub fn run(&mut self) {
+    pub fn run(&mut self) -> Result<(), DaemonError> {
         loop {
-            match self.source.wait_for_next() {
+            match self.source.wait_for_next()? {
                 RuntimeEvent::Idle => {}
-                RuntimeEvent::Shutdown => return,
+                RuntimeEvent::ClipboardTextChanged { text } => {
+                    self.ingest_clipboard_text(text)?;
+                }
+                RuntimeEvent::Shutdown => return Ok(()),
             }
         }
+    }
+
+    fn ingest_clipboard_text(&mut self, text: String) -> Result<(), BlipError> {
+        self.store.insert_blip(&NewBlip {
+            workspace_name: INBOX_WORKSPACE.to_owned(),
+            source_app: None,
+            content_type: ContentType::PlainText,
+            language: None,
+            content: text,
+            token_estimate: None,
+            is_redacted: false,
+            tags: Vec::new(),
+        })?;
+
+        Ok(())
     }
 }
 
 pub trait IngestionSource {
-    fn wait_for_next(&mut self) -> RuntimeEvent;
+    fn wait_for_next(&mut self) -> Result<RuntimeEvent, DaemonError>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeEvent {
     Idle,
+    ClipboardTextChanged { text: String },
     Shutdown,
+}
+
+#[derive(Debug, Error)]
+pub enum DaemonError {
+    #[error(transparent)]
+    Store(#[from] BlipError),
+
+    #[error(transparent)]
+    Clipboard(#[from] ClipboardError),
 }
 
 pub struct PendingIngestionSource {
@@ -74,15 +105,47 @@ impl Default for PendingIngestionSource {
 }
 
 impl IngestionSource for PendingIngestionSource {
-    fn wait_for_next(&mut self) -> RuntimeEvent {
+    fn wait_for_next(&mut self) -> Result<RuntimeEvent, DaemonError> {
         thread::sleep(self.interval);
-        RuntimeEvent::Idle
+        Ok(RuntimeEvent::Idle)
+    }
+}
+
+pub struct ClipboardIngestionSource<W> {
+    watcher: W,
+    idle_interval: Duration,
+}
+
+impl<W> ClipboardIngestionSource<W>
+where
+    W: ClipboardWatcher,
+{
+    pub fn new(watcher: W, idle_interval: Duration) -> Self {
+        Self {
+            watcher,
+            idle_interval,
+        }
+    }
+}
+
+impl<W> IngestionSource for ClipboardIngestionSource<W>
+where
+    W: ClipboardWatcher,
+{
+    fn wait_for_next(&mut self) -> Result<RuntimeEvent, DaemonError> {
+        let Some(event) = self.watcher.poll_next()? else {
+            thread::sleep(self.idle_interval);
+            return Ok(RuntimeEvent::Idle);
+        };
+
+        Ok(RuntimeEvent::ClipboardTextChanged { text: event.text })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use blip_clipboard::{ClipboardEvent, ClipboardWatcher};
 
     struct ScriptedIngestionSource {
         events: Vec<RuntimeEvent>,
@@ -90,9 +153,19 @@ mod tests {
     }
 
     impl IngestionSource for ScriptedIngestionSource {
-        fn wait_for_next(&mut self) -> RuntimeEvent {
+        fn wait_for_next(&mut self) -> Result<RuntimeEvent, DaemonError> {
             self.calls += 1;
-            self.events.pop().unwrap_or(RuntimeEvent::Shutdown)
+            Ok(self.events.pop().unwrap_or(RuntimeEvent::Shutdown))
+        }
+    }
+
+    struct ScriptedClipboardWatcher {
+        events: Vec<Option<ClipboardEvent>>,
+    }
+
+    impl ClipboardWatcher for ScriptedClipboardWatcher {
+        fn poll_next(&mut self) -> Result<Option<ClipboardEvent>, ClipboardError> {
+            Ok(self.events.pop().unwrap_or(None))
         }
     }
 
@@ -109,7 +182,7 @@ mod tests {
         };
         let mut runtime = DaemonRuntime::new("/tmp/blipcoard-test.db", store, source);
 
-        runtime.run();
+        runtime.run().expect("runtime should stop cleanly");
 
         assert_eq!(runtime.source.calls, 3);
     }
@@ -133,5 +206,59 @@ mod tests {
         assert_eq!(response.service, "blipd");
         assert_eq!(response.status, "ready");
         assert_eq!(response.active_workspace.as_deref(), Some("inbox"));
+    }
+
+    #[test]
+    fn clipboard_source_maps_watcher_events_to_runtime_events() {
+        let watcher = ScriptedClipboardWatcher {
+            events: vec![Some(ClipboardEvent {
+                text: "copied text".to_owned(),
+            })],
+        };
+        let mut source = ClipboardIngestionSource::new(watcher, Duration::ZERO);
+
+        assert_eq!(
+            source
+                .wait_for_next()
+                .expect("clipboard source should poll watcher"),
+            RuntimeEvent::ClipboardTextChanged {
+                text: "copied text".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_persists_clipboard_text_events_into_inbox() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let source = ScriptedIngestionSource {
+            events: vec![
+                RuntimeEvent::Shutdown,
+                RuntimeEvent::ClipboardTextChanged {
+                    text: "copied text".to_owned(),
+                },
+            ],
+            calls: 0,
+        };
+        let mut runtime = DaemonRuntime::new("/tmp/blipcoard-test.db", store, source);
+
+        runtime.run().expect("runtime should ingest clipboard text");
+
+        let blips = runtime
+            .store
+            .list_blips("inbox")
+            .expect("inbox blips should be listed");
+        assert_eq!(blips.len(), 1);
+        assert_eq!(blips[0].content, "copied text");
+        assert_eq!(blips[0].content_type, ContentType::PlainText);
+
+        let audit_events = runtime
+            .store
+            .list_audit_events()
+            .expect("audit events should be listed");
+        assert!(audit_events.iter().any(|event| {
+            event.event_type == blip_core::AuditEventType::BlipIngested
+                && event.target_blip_id.as_deref() == Some(blips[0].id.as_str())
+                && event.target_workspace.as_deref() == Some("inbox")
+        }));
     }
 }
