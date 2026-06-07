@@ -174,3 +174,35 @@ Success condition:
 
 - users can install, upgrade, and run `blipcoard` without bypassing the daemon,
   CLI, or local store ownership model
+
+## Phase 10: Documentation site and public docs
+
+Goal:
+
+- make the product, architecture, and developer workflow easier to understand
+  through a browsable documentation site instead of scattered repository notes
+
+Must have:
+
+- docs site scaffold with a maintainable sidebar and landing navigation
+- Docusaurus as the docs site generator unless a materially better option is
+  chosen during Phase 10.1
+- migration path for the existing `docs/` Markdown into the site structure
+- product overview, architecture, roadmap, and security/privacy pages
+- CLI, daemon, and developer workflow reference pages
+- contribution, review, and publishing workflow documentation
+- search and link structure that makes phase and feature docs easy to find
+- a repeatable docs build and publish pipeline
+
+Out of scope:
+
+- marketing copy that is not product documentation
+- replacing source-of-truth repo markdown where raw notes are still the better
+  fit
+- a public blog or changelog system unrelated to product docs
+
+Success condition:
+
+- a new contributor or user can find the architecture, setup, roadmap, CLI, and
+  daemon references from a browsable docs site without reading raw repository
+  Markdown first

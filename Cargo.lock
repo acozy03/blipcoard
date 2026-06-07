@@ -158,10 +158,12 @@ name = "blip-daemon"
 version = "0.1.0"
 dependencies = [
  "blip-api",
+ "blip-clipboard",
  "blip-config",
  "blip-core",
  "chrono",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]

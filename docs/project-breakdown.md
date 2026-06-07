@@ -287,3 +287,74 @@ Packaging rule:
 - desktop bundles must include daemon + CLI
 - CLI-only installs are supported
 - desktop-only installs are not supported
+
+## Part 10: Documentation Site and Public Docs
+
+Goal:
+
+- publish the repository's documentation in a browsable site so product,
+  architecture, and developer guidance are easy to navigate and maintain
+
+Why this is its own part:
+
+- the repository already uses Markdown for technical notes and roadmap docs
+- a docs site adds navigation, search, layout consistency, and a stable entry
+  point for users and contributors
+- the docs surface should stay aligned with implementation phases instead of
+  becoming a disconnected marketing site
+
+Subphases:
+
+1. Site scaffold and information architecture
+   - choose the docs site generator and theme, with Docusaurus as the default
+     recommendation unless another static docs stack proves materially better
+   - define the sidebar and top-level navigation
+   - decide what belongs in the public docs site versus raw repository Markdown
+   - wire local dev preview and build commands
+2. Content migration
+   - move existing architecture and roadmap docs into site pages
+   - preserve links between phases, design notes, and reference material
+   - clean up duplicated or stale sections as content is migrated
+   - maintain source-of-truth references for repository-only notes
+3. Product and architecture docs
+   - document the problem statement, runtime model, and data flow
+   - document daemon ownership, clipboard boundaries, and workspace policy
+   - document phase definitions in a user-friendly way
+   - document security and privacy defaults clearly
+4. Reference docs
+   - document CLI commands and expected outputs
+   - document daemon startup, health checks, and operational expectations
+   - document config, data, and log locations
+   - document common troubleshooting and backup/recovery steps
+5. Contributor workflow docs
+   - document branching, PR review, and issue workflow
+   - document coding standards and test expectations
+   - document how to update the docs when implementation phases move
+   - document release and versioning conventions
+6. Publishing and maintenance
+   - add CI checks for docs build correctness
+   - add a publish workflow or deployment target
+   - decide whether docs are versioned alongside releases
+   - keep docs and roadmap phases in sync over time
+
+Deliverables:
+
+- docs site scaffold with navigation and local preview
+- imported architecture, roadmap, and reference content
+- CLI/daemon/user workflow pages
+- contributor and release workflow docs
+- docs build and publish automation
+- maintenance guidance for keeping docs aligned with implementation phases
+
+Questions answered in this phase:
+
+- which docs belong in the browsable site versus raw repo Markdown
+- should the docs stack be Docusaurus or another static site generator
+- how much versioned documentation is needed for the project lifecycle
+- how should docs updates be reviewed alongside code changes
+
+Success condition:
+
+- documentation is easy to browse, searchable, and versioned well enough that a
+  new contributor or user can orient themselves without reading the repository
+  Markdown tree directly

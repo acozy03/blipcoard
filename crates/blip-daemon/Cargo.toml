@@ -7,10 +7,12 @@ rust-version.workspace = true
 
 [dependencies]
 blip-api = { path = "../blip-api" }
+blip-clipboard = { path = "../blip-clipboard" }
 blip-config = { path = "../blip-config" }
 blip-core = { path = "../blip-core" }
 chrono.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

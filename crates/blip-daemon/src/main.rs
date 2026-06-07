@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let response = runtime.health_response()?;
 
     println!("{}", serde_json::to_string_pretty(&response)?);
-    runtime.run();
+    runtime.run()?;
 
     Ok(())
 }
