@@ -4,6 +4,8 @@
 //! feed this runtime through an ingestion source; it should not own storage,
 //! policy, or process lifecycle decisions.
 
+pub mod ipc;
+
 use blip_api::{
     DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode, DaemonCommand, DaemonRequest,
     DaemonRequestPayload, DaemonResponse, DaemonResponsePayload, DaemonVersionResponse,
@@ -431,6 +433,60 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn ipc_server_serves_runtime_health_dispatch() {
+        use crate::ipc::DaemonIpcServer;
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixStream;
+
+        let socket_path = unique_socket_path("blip-daemon-runtime-ipc-test");
+        let server_socket_path = socket_path.clone();
+        let handle = thread::spawn(move || {
+            let store = BlipStore::in_memory().expect("store should initialize");
+            let runtime = DaemonRuntime::new(
+                "/tmp/blipcoard-test.db",
+                store,
+                ScriptedIngestionSource {
+                    events: Vec::new(),
+                    calls: 0,
+                },
+            );
+            DaemonIpcServer::new(&server_socket_path)
+                .serve_one(|request| runtime.dispatch_daemon_request(request))
+                .expect("IPC server should handle one runtime request");
+            std::fs::remove_file(server_socket_path).ok();
+        });
+
+        wait_for_socket(&socket_path);
+        let mut stream = UnixStream::connect(&socket_path).expect("client should connect");
+        let request = DaemonRequest::new(
+            "runtime-health",
+            DaemonCommand::Health,
+            DaemonRequestPayload::Health,
+        );
+        serde_json::to_writer(&mut stream, &request).expect("request should serialize");
+        stream.write_all(b"\n").expect("request should flush");
+
+        let mut response_line = String::new();
+        BufReader::new(stream)
+            .read_line(&mut response_line)
+            .expect("response line should read");
+        let response =
+            serde_json::from_str::<DaemonResponse>(&response_line).expect("response should decode");
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        match response.payload {
+            Some(DaemonResponsePayload::Health(health)) => {
+                assert_eq!(health.service, "blipd");
+                assert_eq!(health.active_workspace.as_deref(), Some("inbox"));
+            }
+            other => panic!("expected health response, got {other:?}"),
+        }
+
+        handle.join().expect("IPC server thread should join");
+    }
+
     #[test]
     fn clipboard_source_maps_watcher_events_to_runtime_events() {
         let watcher = ScriptedClipboardWatcher {
@@ -568,5 +624,26 @@ mod tests {
             }
             other => panic!("expected missing inbox store error, got {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    fn unique_socket_path(prefix: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{}-{nanos}.sock", std::process::id()))
+    }
+
+    #[cfg(unix)]
+    fn wait_for_socket(socket_path: &Path) {
+        for _ in 0..100 {
+            if socket_path.exists() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        panic!("socket was not created at {}", socket_path.display());
     }
 }

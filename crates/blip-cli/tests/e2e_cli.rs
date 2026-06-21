@@ -9,6 +9,12 @@ fn blip_command(db_path: &std::path::Path) -> Command {
     cmd
 }
 
+fn blip_command_with_socket(db_path: &std::path::Path, socket_path: &std::path::Path) -> Command {
+    let mut cmd = blip_command(db_path);
+    cmd.env("BLIPCOARD_SOCKET_PATH", socket_path);
+    cmd
+}
+
 #[test]
 fn cli_can_manage_workspace_and_blips_end_to_end() {
     let temp = tempdir().expect("tempdir should exist");
@@ -82,4 +88,19 @@ fn cli_rejects_duplicate_workspace_creation() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("workspace `demo` already exists"));
+}
+
+#[test]
+fn health_reports_when_daemon_socket_is_unavailable() {
+    let temp = tempdir().expect("tempdir should exist");
+    let db_path = temp.path().join("blipcoard-test.db");
+    let socket_path = temp.path().join("missing-daemon.sock");
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .arg("health")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "daemon is not running at the configured socket",
+        ));
 }

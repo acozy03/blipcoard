@@ -123,6 +123,7 @@ dependencies = [
  "clap",
  "predicates",
  "rusqlite",
+ "serde_json",
  "tempfile",
 ]
 

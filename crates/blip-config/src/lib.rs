@@ -68,6 +68,22 @@ impl BlipConfig {
         fs::write(path, serialized)?;
         Ok(())
     }
+
+    pub fn daemon_socket_path(&self) -> Result<PathBuf, ConfigError> {
+        if let Some(socket_path) = env_override_socket_path() {
+            if let Some(parent) = socket_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            return Ok(socket_path);
+        }
+
+        if let Some(parent) = self.database_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        Ok(self.database_path.with_extension("sock"))
+    }
 }
 
 pub fn config_file_path() -> Result<PathBuf, ConfigError> {
@@ -87,6 +103,10 @@ fn env_override_config_dir() -> Option<PathBuf> {
 
 fn env_override_database_path() -> Option<PathBuf> {
     env::var_os("BLIPCOARD_DB_PATH").map(PathBuf::from)
+}
+
+fn env_override_socket_path() -> Option<PathBuf> {
+    env::var_os("BLIPCOARD_SOCKET_PATH").map(PathBuf::from)
 }
 
 fn project_dirs() -> Result<ProjectDirs, ConfigError> {
