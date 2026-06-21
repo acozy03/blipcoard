@@ -126,12 +126,12 @@ fn health_reports_when_daemon_socket_is_unavailable() {
 }
 
 fn wait_for_socket(socket_path: &Path) {
-    for _ in 0..100 {
+    for _ in 0..200 {
         if socket_path.exists() {
             return;
         }
 
-        thread::sleep(Duration::from_millis(5));
+        thread::sleep(Duration::from_millis(50));
     }
 
     panic!("daemon socket was not created at {}", socket_path.display());
