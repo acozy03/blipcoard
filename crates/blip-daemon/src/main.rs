@@ -36,19 +36,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn start_ipc_server(config: &BlipConfig) -> Result<(), Box<dyn std::error::Error>> {
     let database_path = config.database_path.clone();
     let socket_path = config.daemon_socket_path()?;
+    let store = BlipStore::open(&database_path)?;
+    let runtime = DaemonRuntime::new(&database_path, store, PendingIngestionSource::default());
+    let ipc_server = DaemonIpcServer::new(&socket_path).bind()?;
 
     thread::spawn(move || {
-        let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-            let store = BlipStore::open(&database_path)?;
-            let runtime =
-                DaemonRuntime::new(&database_path, store, PendingIngestionSource::default());
-
-            DaemonIpcServer::new(&socket_path)
-                .serve(|request| runtime.dispatch_daemon_request(request))?;
-            Ok(())
-        })();
-
-        if let Err(error) = result {
+        if let Err(error) = ipc_server.serve(|request| runtime.dispatch_daemon_request(request)) {
             eprintln!("daemon IPC server stopped: {error}");
         }
     });

@@ -76,14 +76,14 @@ impl DaemonIpcServer {
     where
         H: Fn(DaemonRequest) -> DaemonResponse,
     {
-        platform::serve(&self.socket_path, handler)
+        self.bind()?.serve(handler)
     }
 
     pub fn serve_one<H>(&self, handler: H) -> Result<(), IpcError>
     where
         H: Fn(DaemonRequest) -> DaemonResponse,
     {
-        platform::serve_one(&self.socket_path, handler)
+        self.bind()?.serve_one(handler)
     }
 
     #[cfg(test)]
@@ -91,7 +91,41 @@ impl DaemonIpcServer {
     where
         H: Fn(DaemonRequest) -> DaemonResponse,
     {
-        platform::serve_n(&self.socket_path, request_count, handler)
+        self.bind()?.serve_n(request_count, handler)
+    }
+
+    pub fn bind(&self) -> Result<BoundDaemonIpcServer, IpcError> {
+        Ok(BoundDaemonIpcServer {
+            listener: platform::bind(&self.socket_path)?,
+        })
+    }
+}
+
+pub struct BoundDaemonIpcServer {
+    listener: platform::BoundListener,
+}
+
+impl BoundDaemonIpcServer {
+    pub fn serve<H>(self, handler: H) -> Result<(), IpcError>
+    where
+        H: Fn(DaemonRequest) -> DaemonResponse,
+    {
+        self.listener.serve(handler)
+    }
+
+    pub fn serve_one<H>(self, handler: H) -> Result<(), IpcError>
+    where
+        H: Fn(DaemonRequest) -> DaemonResponse,
+    {
+        self.listener.serve_one(handler)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn serve_n<H>(self, request_count: usize, handler: H) -> Result<(), IpcError>
+    where
+        H: Fn(DaemonRequest) -> DaemonResponse,
+    {
+        self.listener.serve_n(request_count, handler)
     }
 }
 
@@ -104,68 +138,71 @@ mod platform {
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::Path;
 
-    pub fn serve<H>(socket_path: &Path, handler: H) -> Result<(), IpcError>
-    where
-        H: Fn(DaemonRequest) -> DaemonResponse,
-    {
-        let listener = bind(socket_path)?;
+    pub struct BoundListener {
+        listener: UnixListener,
+    }
 
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    if let Err(error) = handle_stream(stream, &handler) {
-                        eprintln!("daemon IPC client request failed: {error}");
+    impl BoundListener {
+        pub fn serve<H>(self, handler: H) -> Result<(), IpcError>
+        where
+            H: Fn(DaemonRequest) -> DaemonResponse,
+        {
+            for stream in self.listener.incoming() {
+                match stream {
+                    Ok(stream) => {
+                        if let Err(error) = handle_stream(stream, &handler) {
+                            eprintln!("daemon IPC client request failed: {error}");
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("daemon IPC client accept failed: {error}");
                     }
                 }
-                Err(error) => {
-                    eprintln!("daemon IPC client accept failed: {error}");
-                }
             }
+
+            Ok(())
         }
 
-        Ok(())
-    }
+        pub fn serve_one<H>(self, handler: H) -> Result<(), IpcError>
+        where
+            H: Fn(DaemonRequest) -> DaemonResponse,
+        {
+            let (stream, _) = self.listener.accept()?;
+            handle_stream(stream, &handler)
+        }
 
-    pub fn serve_one<H>(socket_path: &Path, handler: H) -> Result<(), IpcError>
-    where
-        H: Fn(DaemonRequest) -> DaemonResponse,
-    {
-        let listener = bind(socket_path)?;
-        let (stream, _) = listener.accept()?;
-        handle_stream(stream, &handler)
-    }
-
-    #[cfg(test)]
-    pub fn serve_n<H>(socket_path: &Path, request_count: usize, handler: H) -> Result<(), IpcError>
-    where
-        H: Fn(DaemonRequest) -> DaemonResponse,
-    {
-        let listener = bind(socket_path)?;
-
-        for _ in 0..request_count {
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    if let Err(error) = handle_stream(stream, &handler) {
-                        eprintln!("daemon IPC client request failed: {error}");
+        #[cfg(test)]
+        pub fn serve_n<H>(self, request_count: usize, handler: H) -> Result<(), IpcError>
+        where
+            H: Fn(DaemonRequest) -> DaemonResponse,
+        {
+            for _ in 0..request_count {
+                match self.listener.accept() {
+                    Ok((stream, _)) => {
+                        if let Err(error) = handle_stream(stream, &handler) {
+                            eprintln!("daemon IPC client request failed: {error}");
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("daemon IPC client accept failed: {error}");
                     }
                 }
-                Err(error) => {
-                    eprintln!("daemon IPC client accept failed: {error}");
-                }
             }
-        }
 
-        Ok(())
+            Ok(())
+        }
     }
 
-    fn bind(socket_path: &Path) -> Result<UnixListener, IpcError> {
+    pub(super) fn bind(socket_path: &Path) -> Result<BoundListener, IpcError> {
         if let Some(parent) = socket_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
         remove_stale_socket_if_present(socket_path)?;
 
-        Ok(UnixListener::bind(socket_path)?)
+        Ok(BoundListener {
+            listener: UnixListener::bind(socket_path)?,
+        })
     }
 
     fn remove_stale_socket_if_present(socket_path: &Path) -> Result<(), IpcError> {
@@ -230,29 +267,33 @@ mod platform {
     use blip_api::{DaemonRequest, DaemonResponse};
     use std::path::Path;
 
-    pub fn serve<H>(_socket_path: &Path, _handler: H) -> Result<(), IpcError>
-    where
-        H: Fn(DaemonRequest) -> DaemonResponse,
-    {
-        Err(IpcError::UnsupportedPlatform)
+    pub struct BoundListener;
+
+    impl BoundListener {
+        pub fn serve<H>(self, _handler: H) -> Result<(), IpcError>
+        where
+            H: Fn(DaemonRequest) -> DaemonResponse,
+        {
+            Err(IpcError::UnsupportedPlatform)
+        }
+
+        pub fn serve_one<H>(self, _handler: H) -> Result<(), IpcError>
+        where
+            H: Fn(DaemonRequest) -> DaemonResponse,
+        {
+            Err(IpcError::UnsupportedPlatform)
+        }
+
+        #[cfg(test)]
+        pub fn serve_n<H>(self, _request_count: usize, _handler: H) -> Result<(), IpcError>
+        where
+            H: Fn(DaemonRequest) -> DaemonResponse,
+        {
+            Err(IpcError::UnsupportedPlatform)
+        }
     }
 
-    pub fn serve_one<H>(_socket_path: &Path, _handler: H) -> Result<(), IpcError>
-    where
-        H: Fn(DaemonRequest) -> DaemonResponse,
-    {
-        Err(IpcError::UnsupportedPlatform)
-    }
-
-    #[cfg(test)]
-    pub fn serve_n<H>(
-        _socket_path: &Path,
-        _request_count: usize,
-        _handler: H,
-    ) -> Result<(), IpcError>
-    where
-        H: Fn(DaemonRequest) -> DaemonResponse,
-    {
+    pub(super) fn bind(_socket_path: &Path) -> Result<BoundListener, IpcError> {
         Err(IpcError::UnsupportedPlatform)
     }
 }
