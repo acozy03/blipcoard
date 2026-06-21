@@ -1,6 +1,11 @@
+pub mod daemon_client;
+mod store_backend;
+
 use blip_config::BlipConfig;
-use blip_core::{BlipError, BlipStore, ContentType, NewBlip, NewWorkspace};
+use blip_core::{BlipError, ContentType, NewBlip, NewWorkspace};
 use clap::{Parser, Subcommand};
+use daemon_client::DaemonClient;
+use store_backend::StoreCommandBackend;
 
 const DEFAULT_LIST_LIMIT: usize = 50;
 
@@ -14,6 +19,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    Health,
     Current,
     Workspaces,
     Inbox {
@@ -45,20 +51,36 @@ enum Commands {
     },
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let config = BlipConfig::load_or_create()?;
-    let mut store = BlipStore::open(&config.database_path)?;
 
     match cli.command {
+        Commands::Health => {
+            let health = DaemonClient::from_config(&config)?.health()?;
+            println!("{} {}", health.service, health.status);
+            println!("database: {}", health.database_path);
+            let active_workspace = health.active_workspace.as_deref().unwrap_or("none");
+            println!("active workspace: {active_workspace}");
+            println!("generated at: {}", health.generated_at);
+        }
         Commands::Current => {
-            let current = store
-                .get_active_workspace()?
+            let current = DaemonClient::from_config(&config)?
+                .current_workspace()?
+                .active_workspace
                 .unwrap_or_else(|| "none".to_string());
             println!("{current}");
         }
         Commands::Workspaces => {
-            for workspace in store.list_workspaces()? {
+            let workspaces = DaemonClient::from_config(&config)?.workspaces()?;
+            for workspace in workspaces.workspaces {
                 let access = if workspace.agent_access {
                     "agent-readable"
                 } else {
@@ -68,7 +90,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Inbox { limit } => {
-            for blip in store.list_blip_summaries("inbox", limit)? {
+            let blips = DaemonClient::from_config(&config)?.blips("inbox", limit)?;
+            for blip in blips.blips {
                 println!(
                     "{} :: {}",
                     blip.id,
@@ -77,7 +100,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::List { workspace, limit } => {
-            for blip in store.list_blip_summaries(&workspace, limit)? {
+            let blips = DaemonClient::from_config(&config)?.blips(&workspace, limit)?;
+            for blip in blips.blips {
                 println!(
                     "{} :: {}",
                     blip.id,
@@ -91,7 +115,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             color,
             agent_access,
         } => {
-            let workspace = match store.create_workspace(&NewWorkspace {
+            let mut store_backend = StoreCommandBackend::open(&config.database_path)?;
+            let workspace = match store_backend.create_workspace(&NewWorkspace {
                 name,
                 description,
                 color,
@@ -108,7 +133,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("created workspace {}", workspace.name);
         }
         Commands::Use { workspace } => {
-            store.set_active_workspace(&workspace)?;
+            let mut store_backend = StoreCommandBackend::open(&config.database_path)?;
+            store_backend.set_active_workspace(&workspace)?;
             println!("active workspace set to {workspace}");
         }
         Commands::AddDemo {
@@ -116,7 +142,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             content,
             source_app,
         } => {
-            let blip = store.insert_blip(&NewBlip {
+            let mut store_backend = StoreCommandBackend::open(&config.database_path)?;
+            let blip = store_backend.insert_blip(&NewBlip {
                 workspace_name: workspace,
                 source_app,
                 content_type: ContentType::PlainText,
