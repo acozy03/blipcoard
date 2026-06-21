@@ -7,9 +7,10 @@
 pub mod ipc;
 
 use blip_api::{
-    CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode,
-    DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
-    DaemonVersionResponse, HealthResponse,
+    BlipListResponse, BlipSummary, CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError,
+    DaemonApiErrorCode, DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse,
+    DaemonResponsePayload, DaemonVersionResponse, HealthResponse, WorkspaceListResponse,
+    WorkspaceSummary,
 };
 use blip_clipboard::{ClipboardError, ClipboardWatcher};
 use blip_core::{BlipError, BlipStore, ContentType, NewBlip};
@@ -124,6 +125,58 @@ where
                     DaemonApiError::new(DaemonApiErrorCode::StoreUnavailable, error.to_string()),
                 ),
             },
+            (DaemonCommand::ListWorkspaces, DaemonRequestPayload::ListWorkspaces) => {
+                match self.store.list_workspaces() {
+                    Ok(workspaces) => DaemonResponse::ok(
+                        request_id,
+                        command,
+                        DaemonResponsePayload::Workspaces(WorkspaceListResponse {
+                            workspaces: workspaces
+                                .into_iter()
+                                .map(|workspace| WorkspaceSummary {
+                                    name: workspace.name,
+                                    agent_access: workspace.agent_access,
+                                })
+                                .collect(),
+                        }),
+                    ),
+                    Err(error) => DaemonResponse::error(
+                        request_id,
+                        command,
+                        DaemonApiError::new(
+                            DaemonApiErrorCode::StoreUnavailable,
+                            error.to_string(),
+                        ),
+                    ),
+                }
+            }
+            (DaemonCommand::ListBlips, DaemonRequestPayload::ListBlips { workspace, limit }) => {
+                match self.store.list_blip_summaries(&workspace, limit) {
+                    Ok(blips) => DaemonResponse::ok(
+                        request_id,
+                        command,
+                        DaemonResponsePayload::Blips(BlipListResponse {
+                            workspace,
+                            blips: blips
+                                .into_iter()
+                                .map(|blip| BlipSummary {
+                                    id: blip.id,
+                                    preview: blip.preview,
+                                    size_bytes: blip.size_bytes,
+                                })
+                                .collect(),
+                        }),
+                    ),
+                    Err(error) => DaemonResponse::error(
+                        request_id,
+                        command,
+                        DaemonApiError::new(
+                            DaemonApiErrorCode::StoreUnavailable,
+                            error.to_string(),
+                        ),
+                    ),
+                }
+            }
             _ => DaemonResponse::error(
                 request_id,
                 command,
@@ -424,6 +477,100 @@ mod tests {
                     active_workspace: Some("inbox".to_owned()),
                 },
             )),
+        );
+    }
+
+    #[test]
+    fn dispatch_returns_workspace_list_payload() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&blip_core::NewWorkspace {
+                name: "auth-bug".to_owned(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should be created");
+        let runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "workspaces-1",
+            DaemonCommand::ListWorkspaces,
+            DaemonRequestPayload::ListWorkspaces,
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        match response.payload {
+            Some(DaemonResponsePayload::Workspaces(workspaces)) => {
+                assert!(
+                    workspaces
+                        .workspaces
+                        .iter()
+                        .any(|workspace| { workspace.name == "inbox" && !workspace.agent_access })
+                );
+                assert!(
+                    workspaces.workspaces.iter().any(|workspace| {
+                        workspace.name == "auth-bug" && workspace.agent_access
+                    })
+                );
+            }
+            other => panic!("expected workspaces response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_returns_blip_list_payload() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let inserted = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".to_owned(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "copied text".to_owned(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("blip should be inserted");
+        let runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "blips-1",
+            DaemonCommand::ListBlips,
+            DaemonRequestPayload::ListBlips {
+                workspace: "inbox".to_owned(),
+                limit: 50,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        assert_eq!(
+            response.payload,
+            Some(DaemonResponsePayload::Blips(BlipListResponse {
+                workspace: "inbox".to_owned(),
+                blips: vec![BlipSummary {
+                    id: inserted.id,
+                    preview: "copied text".to_owned(),
+                    size_bytes: 11,
+                }],
+            })),
         );
     }
 

@@ -45,19 +45,6 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
         .success()
         .stdout(predicate::str::contains("active workspace set to auth-bug"));
 
-    let socket_path = temp.path().join("blipcoard.sock");
-    let mut daemon = blip_daemon_command(&db_path, &socket_path)
-        .spawn()
-        .expect("daemon should start");
-    wait_for_socket(&socket_path);
-
-    blip_command_with_socket(&db_path, &socket_path)
-        .args(["current"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("auth-bug"));
-    stop_daemon(&mut daemon);
-
     blip_command(&db_path)
         .args([
             "add-demo",
@@ -71,10 +58,41 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
         .stdout(predicate::str::contains("created blip"));
 
     blip_command(&db_path)
+        .args(["add-demo", "inbox", "Copied inbox note"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("created blip"));
+
+    let socket_path = temp.path().join("blipcoard.sock");
+    let mut daemon = blip_daemon_command(&db_path, &socket_path)
+        .spawn()
+        .expect("daemon should start");
+    wait_for_socket(&socket_path);
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["current"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("auth-bug"));
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["workspaces"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("auth-bug [human-only]"));
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["inbox"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Copied inbox note"));
+
+    blip_command_with_socket(&db_path, &socket_path)
         .args(["list", "auth-bug"])
         .assert()
         .success()
         .stdout(predicate::str::contains("TypeError: broken login flow"));
+    stop_daemon(&mut daemon);
 
     let agent_access = Connection::open(&db_path)
         .expect("database should open")

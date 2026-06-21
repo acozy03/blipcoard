@@ -1,4 +1,4 @@
-use blip_core::{Blip, BlipError, BlipStore, BlipSummary, NewBlip, NewWorkspace, Workspace};
+use blip_core::{Blip, BlipError, BlipStore, NewBlip, NewWorkspace, Workspace};
 use std::path::Path;
 
 pub struct StoreCommandBackend {
@@ -10,18 +10,6 @@ impl StoreCommandBackend {
         Ok(Self {
             store: BlipStore::open(database_path)?,
         })
-    }
-
-    pub fn workspaces(&self) -> Result<Vec<Workspace>, BlipError> {
-        self.store.list_workspaces()
-    }
-
-    pub fn blip_summaries(
-        &self,
-        workspace: &str,
-        limit: usize,
-    ) -> Result<Vec<BlipSummary>, BlipError> {
-        self.store.list_blip_summaries(workspace, limit)
     }
 
     pub fn create_workspace(&mut self, workspace: &NewWorkspace) -> Result<Workspace, BlipError> {

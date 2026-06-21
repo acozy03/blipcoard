@@ -79,8 +79,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("{current}");
         }
         Commands::Workspaces => {
-            let store_backend = StoreCommandBackend::open(&config.database_path)?;
-            for workspace in store_backend.workspaces()? {
+            let workspaces = DaemonClient::from_config(&config)?.workspaces()?;
+            for workspace in workspaces.workspaces {
                 let access = if workspace.agent_access {
                     "agent-readable"
                 } else {
@@ -90,8 +90,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Inbox { limit } => {
-            let store_backend = StoreCommandBackend::open(&config.database_path)?;
-            for blip in store_backend.blip_summaries("inbox", limit)? {
+            let blips = DaemonClient::from_config(&config)?.blips("inbox", limit)?;
+            for blip in blips.blips {
                 println!(
                     "{} :: {}",
                     blip.id,
@@ -100,8 +100,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::List { workspace, limit } => {
-            let store_backend = StoreCommandBackend::open(&config.database_path)?;
-            for blip in store_backend.blip_summaries(&workspace, limit)? {
+            let blips = DaemonClient::from_config(&config)?.blips(&workspace, limit)?;
+            for blip in blips.blips {
                 println!(
                     "{} :: {}",
                     blip.id,

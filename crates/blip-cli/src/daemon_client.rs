@@ -1,7 +1,7 @@
 use blip_api::{
-    CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonCommand, DaemonRequest,
-    DaemonRequestPayload, DaemonResponse, DaemonResponsePayload, DaemonResponseStatus,
-    DaemonVersionResponse, HealthResponse,
+    BlipListResponse, CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonCommand,
+    DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
+    DaemonResponseStatus, DaemonVersionResponse, HealthResponse, WorkspaceListResponse,
 };
 use blip_config::{BlipConfig, ConfigError};
 use std::error::Error;
@@ -67,6 +67,45 @@ impl DaemonClient {
             Some(DaemonResponsePayload::CurrentWorkspace(current)) => Ok(current),
             other => Err(DaemonClientError::UnexpectedPayload {
                 command: DaemonCommand::CurrentWorkspace,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn workspaces(&self) -> Result<WorkspaceListResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("workspaces"),
+            DaemonCommand::ListWorkspaces,
+            DaemonRequestPayload::ListWorkspaces,
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::Workspaces(workspaces)) => Ok(workspaces),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::ListWorkspaces,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn blips(
+        &self,
+        workspace: &str,
+        limit: usize,
+    ) -> Result<BlipListResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("blips"),
+            DaemonCommand::ListBlips,
+            DaemonRequestPayload::ListBlips {
+                workspace: workspace.to_owned(),
+                limit,
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::Blips(blips)) => Ok(blips),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::ListBlips,
                 payload: payload_name(other.as_ref()),
             }),
         }
