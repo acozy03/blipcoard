@@ -41,12 +41,6 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
         .stdout(predicate::str::contains("created workspace auth-bug"));
 
     blip_command(&db_path)
-        .args(["use", "auth-bug"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("active workspace set to auth-bug"));
-
-    blip_command(&db_path)
         .args([
             "add-demo",
             "auth-bug",
@@ -69,6 +63,21 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
         .spawn()
         .expect("daemon should start");
     wait_for_socket(&socket_path);
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["use", "auth-bug"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("active workspace set to auth-bug"));
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["use", "missing"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "daemon returned not_found: workspace `missing` does not exist",
+        ));
 
     blip_command_with_socket(&db_path, &socket_path)
         .args(["current"])

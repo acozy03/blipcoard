@@ -37,7 +37,7 @@ fn start_ipc_server(config: &BlipConfig) -> Result<(), Box<dyn std::error::Error
     let database_path = config.database_path.clone();
     let socket_path = config.daemon_socket_path()?;
     let store = BlipStore::open(&database_path)?;
-    let runtime = DaemonRuntime::new(&database_path, store, PendingIngestionSource::default());
+    let mut runtime = DaemonRuntime::new(&database_path, store, PendingIngestionSource::default());
     let ipc_server = DaemonIpcServer::new(&socket_path).bind()?;
 
     thread::spawn(move || {
@@ -52,7 +52,7 @@ fn start_ipc_server(config: &BlipConfig) -> Result<(), Box<dyn std::error::Error
 fn serve_ipc(config: &BlipConfig) -> Result<(), Box<dyn std::error::Error>> {
     let socket_path = config.daemon_socket_path()?;
     let store = BlipStore::open(&config.database_path)?;
-    let runtime = DaemonRuntime::new(
+    let mut runtime = DaemonRuntime::new(
         &config.database_path,
         store,
         PendingIngestionSource::default(),
