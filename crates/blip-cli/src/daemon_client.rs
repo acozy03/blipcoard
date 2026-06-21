@@ -1,7 +1,7 @@
 use blip_api::{
-    DAEMON_API_VERSION, DaemonApiError, DaemonCommand, DaemonRequest, DaemonRequestPayload,
-    DaemonResponse, DaemonResponsePayload, DaemonResponseStatus, DaemonVersionResponse,
-    HealthResponse,
+    CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonCommand, DaemonRequest,
+    DaemonRequestPayload, DaemonResponse, DaemonResponsePayload, DaemonResponseStatus,
+    DaemonVersionResponse, HealthResponse,
 };
 use blip_config::{BlipConfig, ConfigError};
 use std::error::Error;
@@ -51,6 +51,22 @@ impl DaemonClient {
             Some(DaemonResponsePayload::Version(version)) => Ok(version),
             other => Err(DaemonClientError::UnexpectedPayload {
                 command: DaemonCommand::Version,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn current_workspace(&self) -> Result<CurrentWorkspaceResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("current"),
+            DaemonCommand::CurrentWorkspace,
+            DaemonRequestPayload::CurrentWorkspace,
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::CurrentWorkspace(current)) => Ok(current),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::CurrentWorkspace,
                 payload: payload_name(other.as_ref()),
             }),
         }

@@ -7,9 +7,9 @@
 pub mod ipc;
 
 use blip_api::{
-    DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode, DaemonCommand, DaemonRequest,
-    DaemonRequestPayload, DaemonResponse, DaemonResponsePayload, DaemonVersionResponse,
-    HealthResponse,
+    CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode,
+    DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
+    DaemonVersionResponse, HealthResponse,
 };
 use blip_clipboard::{ClipboardError, ClipboardWatcher};
 use blip_core::{BlipError, BlipStore, ContentType, NewBlip};
@@ -107,6 +107,23 @@ where
                     daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
                 }),
             ),
+            (DaemonCommand::CurrentWorkspace, DaemonRequestPayload::CurrentWorkspace) => match self
+                .store
+                .get_active_workspace()
+            {
+                Ok(active_workspace) => DaemonResponse::ok(
+                    request_id,
+                    command,
+                    DaemonResponsePayload::CurrentWorkspace(CurrentWorkspaceResponse {
+                        active_workspace,
+                    }),
+                ),
+                Err(error) => DaemonResponse::error(
+                    request_id,
+                    command,
+                    DaemonApiError::new(DaemonApiErrorCode::StoreUnavailable, error.to_string()),
+                ),
+            },
             _ => DaemonResponse::error(
                 request_id,
                 command,
@@ -378,6 +395,35 @@ mod tests {
                 api_version: DAEMON_API_VERSION,
                 daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
             }))
+        );
+    }
+
+    #[test]
+    fn dispatch_returns_current_workspace_payload() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "current-1",
+            DaemonCommand::CurrentWorkspace,
+            DaemonRequestPayload::CurrentWorkspace,
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        assert_eq!(
+            response.payload,
+            Some(DaemonResponsePayload::CurrentWorkspace(
+                CurrentWorkspaceResponse {
+                    active_workspace: Some("inbox".to_owned()),
+                },
+            )),
         );
     }
 

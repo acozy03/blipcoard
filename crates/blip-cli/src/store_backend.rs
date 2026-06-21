@@ -12,10 +12,6 @@ impl StoreCommandBackend {
         })
     }
 
-    pub fn active_workspace(&self) -> Result<Option<String>, BlipError> {
-        self.store.get_active_workspace()
-    }
-
     pub fn workspaces(&self) -> Result<Vec<Workspace>, BlipError> {
         self.store.list_workspaces()
     }

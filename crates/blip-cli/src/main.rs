@@ -72,9 +72,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("generated at: {}", health.generated_at);
         }
         Commands::Current => {
-            let store_backend = StoreCommandBackend::open(&config.database_path)?;
-            let current = store_backend
-                .active_workspace()?
+            let current = DaemonClient::from_config(&config)?
+                .current_workspace()?
+                .active_workspace
                 .unwrap_or_else(|| "none".to_string());
             println!("{current}");
         }
