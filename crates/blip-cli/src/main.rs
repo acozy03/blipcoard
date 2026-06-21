@@ -1,6 +1,10 @@
+pub mod daemon_client;
+mod store_backend;
+
 use blip_config::BlipConfig;
-use blip_core::{BlipError, BlipStore, ContentType, NewBlip, NewWorkspace};
+use blip_core::{BlipError, ContentType, NewBlip, NewWorkspace};
 use clap::{Parser, Subcommand};
+use store_backend::StoreCommandBackend;
 
 const DEFAULT_LIST_LIMIT: usize = 50;
 
@@ -48,17 +52,17 @@ enum Commands {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let config = BlipConfig::load_or_create()?;
-    let mut store = BlipStore::open(&config.database_path)?;
+    let mut store_backend = StoreCommandBackend::open(&config.database_path)?;
 
     match cli.command {
         Commands::Current => {
-            let current = store
-                .get_active_workspace()?
+            let current = store_backend
+                .active_workspace()?
                 .unwrap_or_else(|| "none".to_string());
             println!("{current}");
         }
         Commands::Workspaces => {
-            for workspace in store.list_workspaces()? {
+            for workspace in store_backend.workspaces()? {
                 let access = if workspace.agent_access {
                     "agent-readable"
                 } else {
@@ -68,7 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Inbox { limit } => {
-            for blip in store.list_blip_summaries("inbox", limit)? {
+            for blip in store_backend.blip_summaries("inbox", limit)? {
                 println!(
                     "{} :: {}",
                     blip.id,
@@ -77,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::List { workspace, limit } => {
-            for blip in store.list_blip_summaries(&workspace, limit)? {
+            for blip in store_backend.blip_summaries(&workspace, limit)? {
                 println!(
                     "{} :: {}",
                     blip.id,
@@ -91,7 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             color,
             agent_access,
         } => {
-            let workspace = match store.create_workspace(&NewWorkspace {
+            let workspace = match store_backend.create_workspace(&NewWorkspace {
                 name,
                 description,
                 color,
@@ -108,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("created workspace {}", workspace.name);
         }
         Commands::Use { workspace } => {
-            store.set_active_workspace(&workspace)?;
+            store_backend.set_active_workspace(&workspace)?;
             println!("active workspace set to {workspace}");
         }
         Commands::AddDemo {
@@ -116,7 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             content,
             source_app,
         } => {
-            let blip = store.insert_blip(&NewBlip {
+            let blip = store_backend.insert_blip(&NewBlip {
                 workspace_name: workspace,
                 source_app,
                 content_type: ContentType::PlainText,

@@ -116,6 +116,7 @@ name = "blip-cli"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
+ "blip-api",
  "blip-config",
  "blip-core",
  "clap",

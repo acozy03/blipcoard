@@ -4,7 +4,11 @@
 //! feed this runtime through an ingestion source; it should not own storage,
 //! policy, or process lifecycle decisions.
 
-use blip_api::HealthResponse;
+use blip_api::{
+    DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode, DaemonCommand, DaemonRequest,
+    DaemonRequestPayload, DaemonResponse, DaemonResponsePayload, DaemonVersionResponse,
+    HealthResponse,
+};
 use blip_clipboard::{ClipboardError, ClipboardWatcher};
 use blip_core::{BlipError, BlipStore, ContentType, NewBlip};
 use chrono::Utc;
@@ -59,6 +63,60 @@ where
             active_workspace: self.store.get_active_workspace()?,
             generated_at: Utc::now(),
         })
+    }
+
+    pub fn dispatch_daemon_request(&self, request: DaemonRequest) -> DaemonResponse {
+        let DaemonRequest {
+            api_version,
+            request_id,
+            command,
+            payload,
+        } = request;
+
+        if api_version != DAEMON_API_VERSION {
+            return DaemonResponse::error(
+                request_id,
+                command,
+                DaemonApiError::new(
+                    DaemonApiErrorCode::UnsupportedApiVersion,
+                    format!(
+                        "unsupported daemon API version {api_version}; expected {DAEMON_API_VERSION}"
+                    ),
+                ),
+            );
+        }
+
+        match (command, payload) {
+            (DaemonCommand::Health, DaemonRequestPayload::Health) => match self.health_response() {
+                Ok(response) => {
+                    DaemonResponse::ok(request_id, command, DaemonResponsePayload::Health(response))
+                }
+                Err(error) => DaemonResponse::error(
+                    request_id,
+                    command,
+                    DaemonApiError::new(DaemonApiErrorCode::StoreUnavailable, error.to_string()),
+                ),
+            },
+            (DaemonCommand::Version, DaemonRequestPayload::Version) => DaemonResponse::ok(
+                request_id,
+                command,
+                DaemonResponsePayload::Version(DaemonVersionResponse {
+                    api_version: DAEMON_API_VERSION,
+                    daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
+                }),
+            ),
+            _ => DaemonResponse::error(
+                request_id,
+                command,
+                DaemonApiError::new(
+                    DaemonApiErrorCode::InvalidRequest,
+                    format!(
+                        "payload does not match daemon command `{}`",
+                        command.as_str()
+                    ),
+                ),
+            ),
+        }
     }
 
     pub fn run(&mut self) -> Result<(), DaemonError> {
@@ -262,6 +320,115 @@ mod tests {
         assert_eq!(response.service, "blipd");
         assert_eq!(response.status, "ready");
         assert_eq!(response.active_workspace.as_deref(), Some("inbox"));
+    }
+
+    #[test]
+    fn dispatch_returns_health_payload() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "health-1",
+            DaemonCommand::Health,
+            DaemonRequestPayload::Health,
+        ));
+
+        assert_eq!(response.request_id, "health-1");
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        match response.payload {
+            Some(DaemonResponsePayload::Health(health)) => {
+                assert_eq!(health.service, "blipd");
+                assert_eq!(health.active_workspace.as_deref(), Some("inbox"));
+            }
+            other => panic!("expected health payload, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_returns_version_payload() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "version-1",
+            DaemonCommand::Version,
+            DaemonRequestPayload::Version,
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        assert_eq!(
+            response.payload,
+            Some(DaemonResponsePayload::Version(DaemonVersionResponse {
+                api_version: DAEMON_API_VERSION,
+                daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
+            }))
+        );
+    }
+
+    #[test]
+    fn dispatch_rejects_unsupported_api_version() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+        let mut request = DaemonRequest::new(
+            "bad-version",
+            DaemonCommand::Health,
+            DaemonRequestPayload::Health,
+        );
+        request.api_version = DAEMON_API_VERSION + 1;
+
+        let response = runtime.dispatch_daemon_request(request);
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Error);
+        assert_eq!(
+            response.error.map(|error| error.code),
+            Some(DaemonApiErrorCode::UnsupportedApiVersion)
+        );
+    }
+
+    #[test]
+    fn dispatch_rejects_command_payload_mismatch() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "mismatch",
+            DaemonCommand::Health,
+            DaemonRequestPayload::Version,
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Error);
+        assert_eq!(
+            response.error.map(|error| error.code),
+            Some(DaemonApiErrorCode::InvalidRequest)
+        );
     }
 
     #[test]
