@@ -52,6 +52,15 @@ Boundary:
   and RTF, are out of scope for phase 2 and should be treated as unsupported or
   no readable text until phase 8 defines the rich payload model
 
+Dedupe policy:
+
+- phase 2 suppresses repeated identical text clipboard events observed by
+  `blipd` within a two-second window
+- suppressed duplicate events are not persisted and do not emit additional
+  `blip_ingested` audit events
+- different text resets the comparison, and copying the same text again after
+  the suppression window creates a new blip
+
 Success condition:
 
 - copying text creates persisted blips automatically through the daemon path
