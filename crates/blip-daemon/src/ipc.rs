@@ -2,6 +2,9 @@ use blip_api::{DaemonRequest, DaemonResponse};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+const CLIENT_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub enum IpcError {
@@ -10,6 +13,7 @@ pub enum IpcError {
     Io(std::io::Error),
     Serialization(serde_json::Error),
     EmptyRequest,
+    RequestTimeout,
 }
 
 impl Display for IpcError {
@@ -27,6 +31,7 @@ impl Display for IpcError {
             Self::Io(error) => write!(formatter, "daemon IPC io error: {error}"),
             Self::Serialization(error) => write!(formatter, "daemon IPC JSON error: {error}"),
             Self::EmptyRequest => write!(formatter, "daemon IPC client closed without a request"),
+            Self::RequestTimeout => write!(formatter, "daemon IPC client timed out before request"),
         }
     }
 }
@@ -36,7 +41,10 @@ impl Error for IpcError {
         match self {
             Self::Io(error) => Some(error),
             Self::Serialization(error) => Some(error),
-            Self::UnsupportedPlatform | Self::AlreadyRunning { .. } | Self::EmptyRequest => None,
+            Self::UnsupportedPlatform
+            | Self::AlreadyRunning { .. }
+            | Self::EmptyRequest
+            | Self::RequestTimeout => None,
         }
     }
 }
@@ -185,9 +193,21 @@ mod platform {
     where
         H: Fn(DaemonRequest) -> DaemonResponse,
     {
+        stream.set_read_timeout(Some(super::CLIENT_READ_TIMEOUT))?;
         let mut request_line = String::new();
         let mut reader = BufReader::new(stream);
-        let bytes_read = reader.read_line(&mut request_line)?;
+        let bytes_read = match reader.read_line(&mut request_line) {
+            Ok(bytes_read) => bytes_read,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err(IpcError::RequestTimeout);
+            }
+            Err(error) => return Err(IpcError::Io(error)),
+        };
         if bytes_read == 0 {
             return Err(IpcError::EmptyRequest);
         }
@@ -356,6 +376,50 @@ mod tests {
             }))
         );
 
+        handle.join().expect("server thread should join");
+    }
+
+    #[test]
+    fn idle_client_does_not_block_following_valid_request() {
+        let socket_path = unique_socket_path("blip-daemon-ipc-idle-client-test");
+        let server = DaemonIpcServer::new(&socket_path);
+        let server_socket_path = socket_path.clone();
+        let handle = thread::spawn(move || {
+            server
+                .serve_n(2, |request| {
+                    DaemonResponse::ok(
+                        request.request_id,
+                        request.command,
+                        DaemonResponsePayload::Version(DaemonVersionResponse {
+                            api_version: DAEMON_API_VERSION,
+                            daemon_version: "0.1.0-test".to_owned(),
+                        }),
+                    )
+                })
+                .expect("server should process bounded client attempts");
+            std::fs::remove_file(server_socket_path).ok();
+        });
+
+        wait_for_socket(&socket_path);
+        let idle_client = UnixStream::connect(&socket_path).expect("idle client should connect");
+        let mut stream = connect_with_retry(&socket_path);
+        let request = DaemonRequest::new(
+            "transport-after-idle",
+            DaemonCommand::Version,
+            DaemonRequestPayload::Version,
+        );
+        serde_json::to_writer(&mut stream, &request).expect("request should serialize");
+        stream.write_all(b"\n").expect("request should flush");
+
+        let mut response_line = String::new();
+        BufReader::new(stream)
+            .read_line(&mut response_line)
+            .expect("response line should read after idle client");
+        let response =
+            serde_json::from_str::<DaemonResponse>(&response_line).expect("response should decode");
+
+        assert_eq!(response.status, DaemonResponseStatus::Ok);
+        drop(idle_client);
         handle.join().expect("server thread should join");
     }
 
