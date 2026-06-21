@@ -71,6 +71,14 @@ impl DaemonIpcServer {
     {
         platform::serve_one(&self.socket_path, handler)
     }
+
+    #[cfg(test)]
+    pub(crate) fn serve_n<H>(&self, request_count: usize, handler: H) -> Result<(), IpcError>
+    where
+        H: Fn(DaemonRequest) -> DaemonResponse,
+    {
+        platform::serve_n(&self.socket_path, request_count, handler)
+    }
 }
 
 #[cfg(unix)]
@@ -89,7 +97,16 @@ mod platform {
         let listener = bind(socket_path)?;
 
         for stream in listener.incoming() {
-            handle_stream(stream?, &handler)?;
+            match stream {
+                Ok(stream) => {
+                    if let Err(error) = handle_stream(stream, &handler) {
+                        eprintln!("daemon IPC client request failed: {error}");
+                    }
+                }
+                Err(error) => {
+                    eprintln!("daemon IPC client accept failed: {error}");
+                }
+            }
         }
 
         Ok(())
@@ -102,6 +119,29 @@ mod platform {
         let listener = bind(socket_path)?;
         let (stream, _) = listener.accept()?;
         handle_stream(stream, &handler)
+    }
+
+    #[cfg(test)]
+    pub fn serve_n<H>(socket_path: &Path, request_count: usize, handler: H) -> Result<(), IpcError>
+    where
+        H: Fn(DaemonRequest) -> DaemonResponse,
+    {
+        let listener = bind(socket_path)?;
+
+        for _ in 0..request_count {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    if let Err(error) = handle_stream(stream, &handler) {
+                        eprintln!("daemon IPC client request failed: {error}");
+                    }
+                }
+                Err(error) => {
+                    eprintln!("daemon IPC client accept failed: {error}");
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn bind(socket_path: &Path) -> Result<UnixListener, IpcError> {
@@ -160,6 +200,18 @@ mod platform {
     {
         Err(IpcError::UnsupportedPlatform)
     }
+
+    #[cfg(test)]
+    pub fn serve_n<H>(
+        _socket_path: &Path,
+        _request_count: usize,
+        _handler: H,
+    ) -> Result<(), IpcError>
+    where
+        H: Fn(DaemonRequest) -> DaemonResponse,
+    {
+        Err(IpcError::UnsupportedPlatform)
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -209,6 +261,66 @@ mod tests {
         BufReader::new(stream)
             .read_line(&mut response_line)
             .expect("response line should read");
+        let response =
+            serde_json::from_str::<DaemonResponse>(&response_line).expect("response should decode");
+
+        assert_eq!(response.status, DaemonResponseStatus::Ok);
+        assert_eq!(
+            response.payload,
+            Some(DaemonResponsePayload::Version(DaemonVersionResponse {
+                api_version: DAEMON_API_VERSION,
+                daemon_version: "0.1.0-test".to_owned(),
+            }))
+        );
+
+        handle.join().expect("server thread should join");
+    }
+
+    #[test]
+    fn server_continues_after_empty_and_malformed_client_requests() {
+        let socket_path = unique_socket_path("blip-daemon-ipc-malformed-test");
+        let server = DaemonIpcServer::new(&socket_path);
+        let server_socket_path = socket_path.clone();
+        let handle = thread::spawn(move || {
+            server
+                .serve_n(3, |request| {
+                    DaemonResponse::ok(
+                        request.request_id,
+                        request.command,
+                        DaemonResponsePayload::Version(DaemonVersionResponse {
+                            api_version: DAEMON_API_VERSION,
+                            daemon_version: "0.1.0-test".to_owned(),
+                        }),
+                    )
+                })
+                .expect("server should process bounded client attempts");
+            std::fs::remove_file(server_socket_path).ok();
+        });
+
+        wait_for_socket(&socket_path);
+        drop(UnixStream::connect(&socket_path).expect("empty client should connect"));
+
+        {
+            let mut stream =
+                UnixStream::connect(&socket_path).expect("malformed client should connect");
+            stream
+                .write_all(b"not-json\n")
+                .expect("malformed request should write");
+        }
+
+        let mut stream = UnixStream::connect(&socket_path).expect("valid client should connect");
+        let request = DaemonRequest::new(
+            "transport-after-error",
+            DaemonCommand::Version,
+            DaemonRequestPayload::Version,
+        );
+        serde_json::to_writer(&mut stream, &request).expect("request should serialize");
+        stream.write_all(b"\n").expect("request should flush");
+
+        let mut response_line = String::new();
+        BufReader::new(stream)
+            .read_line(&mut response_line)
+            .expect("response line should read after malformed request");
         let response =
             serde_json::from_str::<DaemonResponse>(&response_line).expect("response should decode");
 
