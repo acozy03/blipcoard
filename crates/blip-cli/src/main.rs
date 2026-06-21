@@ -3,8 +3,9 @@ mod store_backend;
 
 use blip_config::BlipConfig;
 use blip_core::{BlipError, ContentType, NewBlip, NewWorkspace};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use daemon_client::DaemonClient;
+use std::io;
 use store_backend::StoreCommandBackend;
 
 const DEFAULT_LIST_LIMIT: usize = 50;
@@ -17,19 +18,38 @@ struct Cli {
     command: Commands,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum OutputFormat {
+    Human,
+    Json,
+}
+
 #[derive(Debug, Subcommand)]
 enum Commands {
-    Health,
-    Current,
-    Workspaces,
+    Health {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
+    Current {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
+    Workspaces {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
     Inbox {
         #[arg(long, default_value_t = DEFAULT_LIST_LIMIT)]
         limit: usize,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
     },
     List {
         workspace: String,
         #[arg(long, default_value_t = DEFAULT_LIST_LIMIT)]
         limit: usize,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
     },
     Create {
         name: String,
@@ -63,50 +83,92 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = BlipConfig::load_or_create()?;
 
     match cli.command {
-        Commands::Health => {
+        Commands::Health { output } => {
             let health = DaemonClient::from_config(&config)?.health()?;
-            println!("{} {}", health.service, health.status);
-            println!("database: {}", health.database_path);
-            let active_workspace = health.active_workspace.as_deref().unwrap_or("none");
-            println!("active workspace: {active_workspace}");
-            println!("generated at: {}", health.generated_at);
+            match output {
+                OutputFormat::Human => {
+                    println!("{} {}", health.service, health.status);
+                    println!("database: {}", health.database_path);
+                    let active_workspace = health.active_workspace.as_deref().unwrap_or("none");
+                    println!("active workspace: {active_workspace}");
+                    println!("generated at: {}", health.generated_at);
+                }
+                OutputFormat::Json => {
+                    serde_json::to_writer(io::stdout().lock(), &health)?;
+                    println!();
+                }
+            }
         }
-        Commands::Current => {
-            let current = DaemonClient::from_config(&config)?
-                .current_workspace()?
-                .active_workspace
-                .unwrap_or_else(|| "none".to_string());
-            println!("{current}");
+        Commands::Current { output } => {
+            let current = DaemonClient::from_config(&config)?.current_workspace()?;
+            match output {
+                OutputFormat::Human => {
+                    let active_workspace = current.active_workspace.as_deref().unwrap_or("none");
+                    println!("{active_workspace}");
+                }
+                OutputFormat::Json => {
+                    serde_json::to_writer(io::stdout().lock(), &current)?;
+                    println!();
+                }
+            }
         }
-        Commands::Workspaces => {
+        Commands::Workspaces { output } => {
             let workspaces = DaemonClient::from_config(&config)?.workspaces()?;
-            for workspace in workspaces.workspaces {
-                let access = if workspace.agent_access {
-                    "agent-readable"
-                } else {
-                    "human-only"
-                };
-                println!("{} [{access}]", workspace.name);
+            match output {
+                OutputFormat::Human => {
+                    for workspace in workspaces.workspaces {
+                        let access = if workspace.agent_access {
+                            "agent-readable"
+                        } else {
+                            "human-only"
+                        };
+                        println!("{} [{access}]", workspace.name);
+                    }
+                }
+                OutputFormat::Json => {
+                    serde_json::to_writer(io::stdout().lock(), &workspaces)?;
+                    println!();
+                }
             }
         }
-        Commands::Inbox { limit } => {
+        Commands::Inbox { limit, output } => {
             let blips = DaemonClient::from_config(&config)?.blips("inbox", limit)?;
-            for blip in blips.blips {
-                println!(
-                    "{} :: {}",
-                    blip.id,
-                    format_preview(&blip.preview, blip.size_bytes)
-                );
+            match output {
+                OutputFormat::Human => {
+                    for blip in blips.blips {
+                        println!(
+                            "{} :: {}",
+                            blip.id,
+                            format_preview(&blip.preview, blip.size_bytes)
+                        );
+                    }
+                }
+                OutputFormat::Json => {
+                    serde_json::to_writer(io::stdout().lock(), &blips)?;
+                    println!();
+                }
             }
         }
-        Commands::List { workspace, limit } => {
+        Commands::List {
+            workspace,
+            limit,
+            output,
+        } => {
             let blips = DaemonClient::from_config(&config)?.blips(&workspace, limit)?;
-            for blip in blips.blips {
-                println!(
-                    "{} :: {}",
-                    blip.id,
-                    format_preview(&blip.preview, blip.size_bytes)
-                );
+            match output {
+                OutputFormat::Human => {
+                    for blip in blips.blips {
+                        println!(
+                            "{} :: {}",
+                            blip.id,
+                            format_preview(&blip.preview, blip.size_bytes)
+                        );
+                    }
+                }
+                OutputFormat::Json => {
+                    serde_json::to_writer(io::stdout().lock(), &blips)?;
+                    println!();
+                }
             }
         }
         Commands::Create {
