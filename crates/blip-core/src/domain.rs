@@ -78,6 +78,13 @@ pub struct BlipSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlipMove {
+    pub id: String,
+    pub from_workspace: String,
+    pub to_workspace: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewBlip {
     pub workspace_name: String,
     pub source_app: Option<String>,

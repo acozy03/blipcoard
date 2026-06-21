@@ -1,6 +1,6 @@
 use crate::domain::{
-    ActorType, AuditEvent, AuditEventType, Blip, BlipSummary, ContentType, NewBlip, NewWorkspace,
-    Workspace,
+    ActorType, AuditEvent, AuditEventType, Blip, BlipMove, BlipSummary, ContentType, NewBlip,
+    NewWorkspace, Workspace,
 };
 use crate::error::{BlipError, is_sqlite_busy_error};
 use chrono::{DateTime, Utc};
@@ -391,6 +391,104 @@ impl BlipStore {
         Ok(summaries)
     }
 
+    pub fn move_blip(&mut self, id: &str, target_workspace: &str) -> Result<BlipMove, BlipError> {
+        self.with_busy_retry(|store| store.move_blip_once(id, target_workspace))
+    }
+
+    fn move_blip_once(&mut self, id: &str, target_workspace: &str) -> Result<BlipMove, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        let moved = Self::move_blip_in_transaction(&tx, id, target_workspace)?;
+
+        tx.commit()?;
+        Ok(moved)
+    }
+
+    pub fn move_latest_inbox_blip(
+        &mut self,
+        target_workspace: &str,
+    ) -> Result<BlipMove, BlipError> {
+        self.with_busy_retry(|store| store.move_latest_inbox_blip_once(target_workspace))
+    }
+
+    fn move_latest_inbox_blip_once(
+        &mut self,
+        target_workspace: &str,
+    ) -> Result<BlipMove, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        if Self::get_workspace_from(&tx, target_workspace)?.is_none() {
+            return Err(BlipError::WorkspaceNotFound(target_workspace.to_owned()));
+        }
+
+        let id = tx
+            .query_row(
+                "SELECT id FROM blips
+                 WHERE workspace_name = ?1
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 1",
+                [INBOX_WORKSPACE],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(BlipError::InboxEmpty)?;
+
+        let moved = Self::move_blip_in_transaction(&tx, &id, target_workspace)?;
+
+        tx.commit()?;
+        Ok(moved)
+    }
+
+    fn move_blip_in_transaction(
+        conn: &Connection,
+        id: &str,
+        target_workspace: &str,
+    ) -> Result<BlipMove, BlipError> {
+        if Self::get_workspace_from(conn, target_workspace)?.is_none() {
+            return Err(BlipError::WorkspaceNotFound(target_workspace.to_owned()));
+        }
+
+        let from_workspace: String = conn
+            .query_row(
+                "SELECT workspace_name FROM blips WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| BlipError::BlipNotFound(id.to_owned()))?;
+
+        conn.execute(
+            "UPDATE blips SET workspace_name = ?1 WHERE id = ?2",
+            params![target_workspace, id],
+        )?;
+
+        let details_json = serde_json::json!({
+            "from_workspace": from_workspace,
+            "to_workspace": target_workspace,
+        })
+        .to_string();
+
+        Self::insert_audit_event(
+            conn,
+            ActorType::User,
+            None,
+            AuditEventType::BlipMoved,
+            Some(id.to_owned()),
+            Some(target_workspace.to_owned()),
+            Some(details_json),
+        )?;
+
+        Ok(BlipMove {
+            id: id.to_owned(),
+            from_workspace,
+            to_workspace: target_workspace.to_owned(),
+        })
+    }
+
     fn insert_workspace(
         conn: &Connection,
         workspace: &NewWorkspace,
@@ -680,6 +778,138 @@ mod tests {
         let blips = store.list_blips("auth-bug").expect("list should work");
         assert_eq!(blips.len(), 1);
         assert_eq!(blips[0].id, blip.id);
+    }
+
+    #[test]
+    fn moves_latest_inbox_blip_to_workspace_with_audit_event() {
+        let mut store = store_with_workspace("auth-bug");
+        store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "older note".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("older inbox blip should insert");
+        let latest = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "latest note".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("latest inbox blip should insert");
+
+        let moved = store
+            .move_latest_inbox_blip("auth-bug")
+            .expect("latest inbox blip should move");
+
+        assert_eq!(moved.id, latest.id);
+        assert_eq!(moved.from_workspace, "inbox");
+        assert_eq!(moved.to_workspace, "auth-bug");
+        assert_eq!(
+            store
+                .get_blip(&latest.id)
+                .expect("blip should read")
+                .expect("blip should exist")
+                .workspace_name,
+            "auth-bug"
+        );
+        let audit_events = store.list_audit_events().expect("audit list should work");
+        assert!(audit_events.iter().any(|event| {
+            event.event_type == AuditEventType::BlipMoved
+                && event.target_blip_id.as_deref() == Some(latest.id.as_str())
+                && event.target_workspace.as_deref() == Some("auth-bug")
+                && event
+                    .details_json
+                    .as_deref()
+                    .is_some_and(|details| details.contains("\"from_workspace\":\"inbox\""))
+        }));
+    }
+
+    #[test]
+    fn moves_specific_blip_between_workspaces_for_recovery() {
+        let mut store = store_with_workspace("auth-bug");
+        let blip = store
+            .insert_blip(&NewBlip {
+                workspace_name: "auth-bug".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "misrouted note".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("blip should insert");
+
+        let moved = store
+            .move_blip(&blip.id, "inbox")
+            .expect("specific blip should move");
+
+        assert_eq!(moved.id, blip.id);
+        assert_eq!(moved.from_workspace, "auth-bug");
+        assert_eq!(moved.to_workspace, "inbox");
+        assert_eq!(
+            store
+                .get_blip(&blip.id)
+                .expect("blip should read")
+                .expect("blip should exist")
+                .workspace_name,
+            "inbox"
+        );
+    }
+
+    #[test]
+    fn move_returns_clear_errors_for_missing_inputs() {
+        let mut store = store_with_workspace("auth-bug");
+        let blip = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "note".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("blip should insert");
+
+        let missing_workspace = store
+            .move_blip(&blip.id, "missing")
+            .expect_err("missing workspace should fail");
+        assert!(matches!(
+            missing_workspace,
+            BlipError::WorkspaceNotFound(workspace) if workspace == "missing"
+        ));
+
+        let missing_blip = store
+            .move_blip("missing-blip", "auth-bug")
+            .expect_err("missing blip should fail");
+        assert!(matches!(
+            missing_blip,
+            BlipError::BlipNotFound(id) if id == "missing-blip"
+        ));
+    }
+
+    #[test]
+    fn move_latest_inbox_blip_errors_when_inbox_is_empty() {
+        let mut store = store_with_workspace("auth-bug");
+
+        let error = store
+            .move_latest_inbox_blip("auth-bug")
+            .expect_err("empty inbox should fail");
+
+        assert!(matches!(error, BlipError::InboxEmpty));
     }
 
     #[test]
@@ -993,5 +1223,20 @@ mod tests {
         assert_eq!(schema_init_before, 1);
         assert_eq!(schema_init_after, 1);
         assert_eq!(inbox_created_count, 1);
+    }
+
+    fn store_with_workspace(workspace: &str) -> BlipStore {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&NewWorkspace {
+                name: workspace.to_owned(),
+                description: None,
+                color: None,
+                agent_access: false,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should be created");
+        store
     }
 }

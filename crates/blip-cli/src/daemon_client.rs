@@ -1,7 +1,8 @@
 use blip_api::{
-    BlipListResponse, CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonCommand,
-    DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
-    DaemonResponseStatus, DaemonVersionResponse, HealthResponse, WorkspaceListResponse,
+    BlipListResponse, BlipRoutedResponse, CurrentWorkspaceResponse, DAEMON_API_VERSION,
+    DaemonApiError, DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse,
+    DaemonResponsePayload, DaemonResponseStatus, DaemonVersionResponse, HealthResponse,
+    WorkspaceListResponse,
 };
 use blip_config::{BlipConfig, ConfigError};
 use std::error::Error;
@@ -132,6 +133,50 @@ impl DaemonClient {
         }
     }
 
+    pub fn route_latest_inbox_blip(
+        &self,
+        workspace: &str,
+    ) -> Result<BlipRoutedResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("route-latest-inbox"),
+            DaemonCommand::RouteLatestInboxBlip,
+            DaemonRequestPayload::RouteLatestInboxBlip {
+                workspace: workspace.to_owned(),
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::BlipRouted(routed)) => Ok(routed),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::RouteLatestInboxBlip,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn route_blip(
+        &self,
+        blip_id: &str,
+        workspace: &str,
+    ) -> Result<BlipRoutedResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("route-blip"),
+            DaemonCommand::RouteBlip,
+            DaemonRequestPayload::RouteBlip {
+                blip_id: blip_id.to_owned(),
+                workspace: workspace.to_owned(),
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::BlipRouted(routed)) => Ok(routed),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::RouteBlip,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
     pub fn request(&self, request: DaemonRequest) -> Result<DaemonResponse, DaemonClientError> {
         let response = platform::request(&self.socket_path, &request)?;
 
@@ -257,6 +302,7 @@ fn payload_name(payload: Option<&DaemonResponsePayload>) -> &'static str {
         Some(DaemonResponsePayload::WorkspaceActivated(_)) => "workspace_activated",
         Some(DaemonResponsePayload::Workspaces(_)) => "workspaces",
         Some(DaemonResponsePayload::Blips(_)) => "blips",
+        Some(DaemonResponsePayload::BlipRouted(_)) => "blip_routed",
         None => "none",
     }
 }
