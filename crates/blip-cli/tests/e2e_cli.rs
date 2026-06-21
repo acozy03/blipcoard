@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use rusqlite::{Connection, OptionalExtension};
+use serde_json::Value;
 use std::path::Path;
 use std::process::{Child, Command as ProcessCommand};
 use std::thread;
@@ -92,6 +93,59 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
         .assert()
         .success()
         .stdout(predicate::str::contains("TypeError: broken login flow"));
+
+    let health = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["health", "--output", "json"],
+    );
+    assert_eq!(health["service"], "blipd");
+    assert_eq!(health["status"], "ready");
+    assert_eq!(health["active_workspace"], "auth-bug");
+
+    let current = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["current", "--output", "json"],
+    );
+    assert_eq!(current["active_workspace"], "auth-bug");
+
+    let workspaces = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["workspaces", "--output", "json"],
+    );
+    let workspaces = workspaces["workspaces"]
+        .as_array()
+        .expect("workspaces should be an array");
+    assert!(
+        workspaces
+            .iter()
+            .any(|workspace| workspace["name"] == "auth-bug" && workspace["agent_access"] == false)
+    );
+
+    let inbox = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["inbox", "--output", "json"],
+    );
+    assert_eq!(inbox["workspace"], "inbox");
+    assert!(
+        inbox["blips"]
+            .as_array()
+            .expect("inbox blips should be an array")
+            .iter()
+            .any(|blip| blip["preview"] == "Copied inbox note")
+    );
+
+    let auth_bug = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["list", "auth-bug", "--output", "json"],
+    );
+    assert_eq!(auth_bug["workspace"], "auth-bug");
+    assert!(
+        auth_bug["blips"]
+            .as_array()
+            .expect("auth-bug blips should be an array")
+            .iter()
+            .any(|blip| blip["preview"] == "TypeError: broken login flow")
+    );
     stop_daemon(&mut daemon);
 
     let agent_access = Connection::open(&db_path)
@@ -135,12 +189,23 @@ fn health_reports_when_daemon_socket_is_unavailable() {
     let socket_path = temp.path().join("missing-daemon.sock");
 
     blip_command_with_socket(&db_path, &socket_path)
-        .arg("health")
+        .args(["health", "--output", "json"])
         .assert()
         .failure()
+        .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains(
             "daemon is not running at the configured socket",
         ));
+}
+
+fn assert_json_success(mut cmd: Command, args: &[&str]) -> Value {
+    let assert = cmd
+        .args(args)
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+
+    serde_json::from_slice(&assert.get_output().stdout).expect("stdout should contain JSON")
 }
 
 fn wait_for_socket(socket_path: &Path) {
