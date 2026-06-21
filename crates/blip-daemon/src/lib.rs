@@ -375,4 +375,31 @@ mod tests {
         );
         assert!(!suppression.should_suppress("copied text", observed_at + Duration::from_secs(3)));
     }
+
+    #[test]
+    fn runtime_propagates_store_errors_from_clipboard_ingestion() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .connection()
+            .execute("DELETE FROM workspaces WHERE name = 'inbox'", [])
+            .expect("test setup should remove inbox");
+        let source = ScriptedIngestionSource {
+            events: vec![RuntimeEvent::ClipboardTextChanged {
+                text: "copied text".to_owned(),
+            }],
+            calls: 0,
+        };
+        let mut runtime = DaemonRuntime::new("/tmp/blipcoard-test.db", store, source);
+
+        let error = runtime
+            .run()
+            .expect_err("missing inbox should surface as a store error");
+
+        match error {
+            DaemonError::Store(BlipError::WorkspaceNotFound(workspace)) => {
+                assert_eq!(workspace, "inbox");
+            }
+            other => panic!("expected missing inbox store error, got {other:?}"),
+        }
+    }
 }
