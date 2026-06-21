@@ -184,3 +184,150 @@ pub enum DaemonApiErrorCode {
     StoreUnavailable,
     Internal,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{DateTime, Utc};
+    use serde_json::json;
+
+    #[test]
+    fn health_request_json_shape_round_trips() {
+        let request = DaemonRequest::new(
+            "request-1",
+            DaemonCommand::Health,
+            DaemonRequestPayload::Health,
+        );
+
+        let value = serde_json::to_value(&request).expect("health request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-1",
+                "command": "health",
+                "payload": "health",
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<DaemonRequest>(value).expect("health request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn health_response_json_shape_round_trips() {
+        let response = DaemonResponse::ok(
+            "request-1",
+            DaemonCommand::Health,
+            DaemonResponsePayload::Health(HealthResponse {
+                service: "blipd".to_owned(),
+                status: "ready".to_owned(),
+                database_path: "/tmp/blipcoard.db".to_owned(),
+                active_workspace: Some("inbox".to_owned()),
+                generated_at: fixed_generated_at(),
+            }),
+        );
+
+        let value = serde_json::to_value(&response).expect("health response should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-1",
+                "command": "health",
+                "status": "ok",
+                "payload": {
+                    "health": {
+                        "service": "blipd",
+                        "status": "ready",
+                        "database_path": "/tmp/blipcoard.db",
+                        "active_workspace": "inbox",
+                        "generated_at": "2026-06-21T12:34:56Z",
+                    }
+                },
+                "error": null,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<DaemonResponse>(value).expect("health response should decode");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn version_response_json_shape_round_trips() {
+        let response = DaemonResponse::ok(
+            "request-2",
+            DaemonCommand::Version,
+            DaemonResponsePayload::Version(DaemonVersionResponse {
+                api_version: 1,
+                daemon_version: "0.1.0".to_owned(),
+            }),
+        );
+
+        let value = serde_json::to_value(&response).expect("version response should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-2",
+                "command": "version",
+                "status": "ok",
+                "payload": {
+                    "version": {
+                        "api_version": 1,
+                        "daemon_version": "0.1.0",
+                    }
+                },
+                "error": null,
+            })
+        );
+
+        let decoded = serde_json::from_value::<DaemonResponse>(value)
+            .expect("version response should decode");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn error_response_json_shape_round_trips() {
+        let response = DaemonResponse::error(
+            "request-3",
+            DaemonCommand::Health,
+            DaemonApiError::new(
+                DaemonApiErrorCode::UnsupportedApiVersion,
+                "unsupported daemon API version 2; expected 1",
+            ),
+        );
+
+        let value = serde_json::to_value(&response).expect("error response should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-3",
+                "command": "health",
+                "status": "error",
+                "payload": null,
+                "error": {
+                    "code": "unsupported_api_version",
+                    "message": "unsupported daemon API version 2; expected 1",
+                },
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<DaemonResponse>(value).expect("error response should decode");
+        assert_eq!(decoded, response);
+    }
+
+    fn fixed_generated_at() -> DateTime<Utc> {
+        "2026-06-21T12:34:56Z"
+            .parse()
+            .expect("fixed timestamp should parse")
+    }
+}
