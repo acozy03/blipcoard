@@ -195,8 +195,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("created workspace {}", workspace.name);
         }
         Commands::Use { workspace } => {
-            let mut store_backend = StoreCommandBackend::open(&config.database_path)?;
-            store_backend.set_active_workspace(&workspace)?;
+            DaemonClient::from_config(&config)?.activate_workspace(&workspace)?;
             println!("active workspace set to {workspace}");
         }
         Commands::AddDemo {

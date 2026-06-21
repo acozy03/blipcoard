@@ -16,10 +16,6 @@ impl StoreCommandBackend {
         self.store.create_workspace(workspace)
     }
 
-    pub fn set_active_workspace(&mut self, workspace: &str) -> Result<(), BlipError> {
-        self.store.set_active_workspace(workspace)
-    }
-
     pub fn insert_blip(&mut self, blip: &NewBlip) -> Result<Blip, BlipError> {
         self.store.insert_blip(blip)
     }

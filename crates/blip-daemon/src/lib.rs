@@ -68,7 +68,7 @@ where
         })
     }
 
-    pub fn dispatch_daemon_request(&self, request: DaemonRequest) -> DaemonResponse {
+    pub fn dispatch_daemon_request(&mut self, request: DaemonRequest) -> DaemonResponse {
         let DaemonRequest {
             api_version,
             request_id,
@@ -118,6 +118,31 @@ where
                     DaemonResponsePayload::CurrentWorkspace(CurrentWorkspaceResponse {
                         active_workspace,
                     }),
+                ),
+                Err(error) => DaemonResponse::error(
+                    request_id,
+                    command,
+                    DaemonApiError::new(DaemonApiErrorCode::StoreUnavailable, error.to_string()),
+                ),
+            },
+            (
+                DaemonCommand::ActivateWorkspace,
+                DaemonRequestPayload::ActivateWorkspace { workspace },
+            ) => match self.store.set_active_workspace(&workspace) {
+                Ok(()) => DaemonResponse::ok(
+                    request_id,
+                    command,
+                    DaemonResponsePayload::WorkspaceActivated(CurrentWorkspaceResponse {
+                        active_workspace: Some(workspace),
+                    }),
+                ),
+                Err(BlipError::WorkspaceNotFound(workspace)) => DaemonResponse::error(
+                    request_id,
+                    command,
+                    DaemonApiError::new(
+                        DaemonApiErrorCode::NotFound,
+                        format!("workspace `{workspace}` does not exist"),
+                    ),
                 ),
                 Err(error) => DaemonResponse::error(
                     request_id,
@@ -397,7 +422,7 @@ mod tests {
     #[test]
     fn dispatch_returns_health_payload() {
         let store = BlipStore::in_memory().expect("store should initialize");
-        let runtime = DaemonRuntime::new(
+        let mut runtime = DaemonRuntime::new(
             "/tmp/blipcoard-test.db",
             store,
             ScriptedIngestionSource {
@@ -426,7 +451,7 @@ mod tests {
     #[test]
     fn dispatch_returns_version_payload() {
         let store = BlipStore::in_memory().expect("store should initialize");
-        let runtime = DaemonRuntime::new(
+        let mut runtime = DaemonRuntime::new(
             "/tmp/blipcoard-test.db",
             store,
             ScriptedIngestionSource {
@@ -454,7 +479,7 @@ mod tests {
     #[test]
     fn dispatch_returns_current_workspace_payload() {
         let store = BlipStore::in_memory().expect("store should initialize");
-        let runtime = DaemonRuntime::new(
+        let mut runtime = DaemonRuntime::new(
             "/tmp/blipcoard-test.db",
             store,
             ScriptedIngestionSource {
@@ -481,6 +506,90 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_activates_workspace_and_records_audit_event() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&blip_core::NewWorkspace {
+                name: "auth-bug".to_owned(),
+                description: None,
+                color: None,
+                agent_access: false,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should be created");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "activate-1",
+            DaemonCommand::ActivateWorkspace,
+            DaemonRequestPayload::ActivateWorkspace {
+                workspace: "auth-bug".to_owned(),
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        assert_eq!(
+            response.payload,
+            Some(DaemonResponsePayload::WorkspaceActivated(
+                CurrentWorkspaceResponse {
+                    active_workspace: Some("auth-bug".to_owned()),
+                },
+            )),
+        );
+        assert_eq!(
+            runtime
+                .store
+                .get_active_workspace()
+                .expect("active workspace should read")
+                .as_deref(),
+            Some("auth-bug")
+        );
+        let audit_events = runtime
+            .store
+            .list_audit_events()
+            .expect("audit events should list");
+        assert!(audit_events.iter().any(|event| {
+            event.event_type == blip_core::AuditEventType::WorkspaceActivated
+                && event.target_workspace.as_deref() == Some("auth-bug")
+        }));
+    }
+
+    #[test]
+    fn dispatch_returns_not_found_for_missing_workspace_activation() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "activate-missing",
+            DaemonCommand::ActivateWorkspace,
+            DaemonRequestPayload::ActivateWorkspace {
+                workspace: "missing".to_owned(),
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Error);
+        assert_eq!(
+            response.error.map(|error| error.code),
+            Some(DaemonApiErrorCode::NotFound)
+        );
+    }
+
+    #[test]
     fn dispatch_returns_workspace_list_payload() {
         let mut store = BlipStore::in_memory().expect("store should initialize");
         store
@@ -493,7 +602,7 @@ mod tests {
                 retention_days: None,
             })
             .expect("workspace should be created");
-        let runtime = DaemonRuntime::new(
+        let mut runtime = DaemonRuntime::new(
             "/tmp/blipcoard-test.db",
             store,
             ScriptedIngestionSource {
@@ -542,7 +651,7 @@ mod tests {
                 tags: Vec::new(),
             })
             .expect("blip should be inserted");
-        let runtime = DaemonRuntime::new(
+        let mut runtime = DaemonRuntime::new(
             "/tmp/blipcoard-test.db",
             store,
             ScriptedIngestionSource {
@@ -577,7 +686,7 @@ mod tests {
     #[test]
     fn dispatch_rejects_unsupported_api_version() {
         let store = BlipStore::in_memory().expect("store should initialize");
-        let runtime = DaemonRuntime::new(
+        let mut runtime = DaemonRuntime::new(
             "/tmp/blipcoard-test.db",
             store,
             ScriptedIngestionSource {
@@ -604,7 +713,7 @@ mod tests {
     #[test]
     fn dispatch_rejects_command_payload_mismatch() {
         let store = BlipStore::in_memory().expect("store should initialize");
-        let runtime = DaemonRuntime::new(
+        let mut runtime = DaemonRuntime::new(
             "/tmp/blipcoard-test.db",
             store,
             ScriptedIngestionSource {
@@ -637,7 +746,7 @@ mod tests {
         let server_socket_path = socket_path.clone();
         let handle = thread::spawn(move || {
             let store = BlipStore::in_memory().expect("store should initialize");
-            let runtime = DaemonRuntime::new(
+            let mut runtime = DaemonRuntime::new(
                 "/tmp/blipcoard-test.db",
                 store,
                 ScriptedIngestionSource {

@@ -41,6 +41,7 @@ pub enum DaemonCommand {
     Health,
     Version,
     CurrentWorkspace,
+    ActivateWorkspace,
     ListWorkspaces,
     ListBlips,
 }
@@ -51,6 +52,7 @@ impl DaemonCommand {
             Self::Health => "health",
             Self::Version => "version",
             Self::CurrentWorkspace => "current_workspace",
+            Self::ActivateWorkspace => "activate_workspace",
             Self::ListWorkspaces => "list_workspaces",
             Self::ListBlips => "list_blips",
         }
@@ -63,6 +65,7 @@ pub enum DaemonRequestPayload {
     Health,
     Version,
     CurrentWorkspace,
+    ActivateWorkspace { workspace: String },
     ListWorkspaces,
     ListBlips { workspace: String, limit: usize },
 }
@@ -122,6 +125,7 @@ pub enum DaemonResponsePayload {
     Health(HealthResponse),
     Version(DaemonVersionResponse),
     CurrentWorkspace(CurrentWorkspaceResponse),
+    WorkspaceActivated(CurrentWorkspaceResponse),
     Workspaces(WorkspaceListResponse),
     Blips(BlipListResponse),
 }
@@ -181,6 +185,7 @@ impl DaemonApiError {
 pub enum DaemonApiErrorCode {
     UnsupportedApiVersion,
     InvalidRequest,
+    NotFound,
     StoreUnavailable,
     Internal,
 }
@@ -289,6 +294,70 @@ mod tests {
 
         let decoded = serde_json::from_value::<DaemonResponse>(value)
             .expect("version response should decode");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn activate_workspace_request_json_shape_round_trips() {
+        let request = DaemonRequest::new(
+            "request-activate",
+            DaemonCommand::ActivateWorkspace,
+            DaemonRequestPayload::ActivateWorkspace {
+                workspace: "auth-bug".to_owned(),
+            },
+        );
+
+        let value = serde_json::to_value(&request).expect("activate request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-activate",
+                "command": "activate_workspace",
+                "payload": {
+                    "activate_workspace": {
+                        "workspace": "auth-bug",
+                    }
+                },
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<DaemonRequest>(value).expect("activate request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn workspace_activated_response_json_shape_round_trips() {
+        let response = DaemonResponse::ok(
+            "request-activate",
+            DaemonCommand::ActivateWorkspace,
+            DaemonResponsePayload::WorkspaceActivated(CurrentWorkspaceResponse {
+                active_workspace: Some("auth-bug".to_owned()),
+            }),
+        );
+
+        let value = serde_json::to_value(&response).expect("activate response should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-activate",
+                "command": "activate_workspace",
+                "status": "ok",
+                "payload": {
+                    "workspace_activated": {
+                        "active_workspace": "auth-bug",
+                    }
+                },
+                "error": null,
+            })
+        );
+
+        let decoded = serde_json::from_value::<DaemonResponse>(value)
+            .expect("activate response should decode");
         assert_eq!(decoded, response);
     }
 

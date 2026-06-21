@@ -72,6 +72,27 @@ impl DaemonClient {
         }
     }
 
+    pub fn activate_workspace(
+        &self,
+        workspace: &str,
+    ) -> Result<CurrentWorkspaceResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("activate-workspace"),
+            DaemonCommand::ActivateWorkspace,
+            DaemonRequestPayload::ActivateWorkspace {
+                workspace: workspace.to_owned(),
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::WorkspaceActivated(current)) => Ok(current),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::ActivateWorkspace,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
     pub fn workspaces(&self) -> Result<WorkspaceListResponse, DaemonClientError> {
         let response = self.request(DaemonRequest::new(
             next_request_id("workspaces"),
@@ -233,6 +254,7 @@ fn payload_name(payload: Option<&DaemonResponsePayload>) -> &'static str {
         Some(DaemonResponsePayload::Health(_)) => "health",
         Some(DaemonResponsePayload::Version(_)) => "version",
         Some(DaemonResponsePayload::CurrentWorkspace(_)) => "current_workspace",
+        Some(DaemonResponsePayload::WorkspaceActivated(_)) => "workspace_activated",
         Some(DaemonResponsePayload::Workspaces(_)) => "workspaces",
         Some(DaemonResponsePayload::Blips(_)) => "blips",
         None => "none",
@@ -243,6 +265,7 @@ fn error_code_name(code: blip_api::DaemonApiErrorCode) -> &'static str {
     match code {
         blip_api::DaemonApiErrorCode::UnsupportedApiVersion => "unsupported_api_version",
         blip_api::DaemonApiErrorCode::InvalidRequest => "invalid_request",
+        blip_api::DaemonApiErrorCode::NotFound => "not_found",
         blip_api::DaemonApiErrorCode::StoreUnavailable => "store_unavailable",
         blip_api::DaemonApiErrorCode::Internal => "internal",
     }

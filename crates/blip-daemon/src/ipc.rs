@@ -74,14 +74,14 @@ impl DaemonIpcServer {
 
     pub fn serve<H>(&self, handler: H) -> Result<(), IpcError>
     where
-        H: Fn(DaemonRequest) -> DaemonResponse,
+        H: FnMut(DaemonRequest) -> DaemonResponse,
     {
         self.bind()?.serve(handler)
     }
 
     pub fn serve_one<H>(&self, handler: H) -> Result<(), IpcError>
     where
-        H: Fn(DaemonRequest) -> DaemonResponse,
+        H: FnMut(DaemonRequest) -> DaemonResponse,
     {
         self.bind()?.serve_one(handler)
     }
@@ -89,7 +89,7 @@ impl DaemonIpcServer {
     #[cfg(test)]
     pub(crate) fn serve_n<H>(&self, request_count: usize, handler: H) -> Result<(), IpcError>
     where
-        H: Fn(DaemonRequest) -> DaemonResponse,
+        H: FnMut(DaemonRequest) -> DaemonResponse,
     {
         self.bind()?.serve_n(request_count, handler)
     }
@@ -108,14 +108,14 @@ pub struct BoundDaemonIpcServer {
 impl BoundDaemonIpcServer {
     pub fn serve<H>(self, handler: H) -> Result<(), IpcError>
     where
-        H: Fn(DaemonRequest) -> DaemonResponse,
+        H: FnMut(DaemonRequest) -> DaemonResponse,
     {
         self.listener.serve(handler)
     }
 
     pub fn serve_one<H>(self, handler: H) -> Result<(), IpcError>
     where
-        H: Fn(DaemonRequest) -> DaemonResponse,
+        H: FnMut(DaemonRequest) -> DaemonResponse,
     {
         self.listener.serve_one(handler)
     }
@@ -123,7 +123,7 @@ impl BoundDaemonIpcServer {
     #[cfg(test)]
     pub(crate) fn serve_n<H>(self, request_count: usize, handler: H) -> Result<(), IpcError>
     where
-        H: Fn(DaemonRequest) -> DaemonResponse,
+        H: FnMut(DaemonRequest) -> DaemonResponse,
     {
         self.listener.serve_n(request_count, handler)
     }
@@ -143,14 +143,14 @@ mod platform {
     }
 
     impl BoundListener {
-        pub fn serve<H>(self, handler: H) -> Result<(), IpcError>
+        pub fn serve<H>(self, mut handler: H) -> Result<(), IpcError>
         where
-            H: Fn(DaemonRequest) -> DaemonResponse,
+            H: FnMut(DaemonRequest) -> DaemonResponse,
         {
             for stream in self.listener.incoming() {
                 match stream {
                     Ok(stream) => {
-                        if let Err(error) = handle_stream(stream, &handler) {
+                        if let Err(error) = handle_stream(stream, &mut handler) {
                             eprintln!("daemon IPC client request failed: {error}");
                         }
                     }
@@ -163,23 +163,23 @@ mod platform {
             Ok(())
         }
 
-        pub fn serve_one<H>(self, handler: H) -> Result<(), IpcError>
+        pub fn serve_one<H>(self, mut handler: H) -> Result<(), IpcError>
         where
-            H: Fn(DaemonRequest) -> DaemonResponse,
+            H: FnMut(DaemonRequest) -> DaemonResponse,
         {
             let (stream, _) = self.listener.accept()?;
-            handle_stream(stream, &handler)
+            handle_stream(stream, &mut handler)
         }
 
         #[cfg(test)]
-        pub fn serve_n<H>(self, request_count: usize, handler: H) -> Result<(), IpcError>
+        pub fn serve_n<H>(self, request_count: usize, mut handler: H) -> Result<(), IpcError>
         where
-            H: Fn(DaemonRequest) -> DaemonResponse,
+            H: FnMut(DaemonRequest) -> DaemonResponse,
         {
             for _ in 0..request_count {
                 match self.listener.accept() {
                     Ok((stream, _)) => {
-                        if let Err(error) = handle_stream(stream, &handler) {
+                        if let Err(error) = handle_stream(stream, &mut handler) {
                             eprintln!("daemon IPC client request failed: {error}");
                         }
                     }
@@ -226,9 +226,9 @@ mod platform {
         }
     }
 
-    fn handle_stream<H>(stream: UnixStream, handler: &H) -> Result<(), IpcError>
+    fn handle_stream<H>(stream: UnixStream, handler: &mut H) -> Result<(), IpcError>
     where
-        H: Fn(DaemonRequest) -> DaemonResponse,
+        H: FnMut(DaemonRequest) -> DaemonResponse,
     {
         stream.set_read_timeout(Some(super::CLIENT_READ_TIMEOUT))?;
         let mut request_line = String::new();
@@ -272,14 +272,14 @@ mod platform {
     impl BoundListener {
         pub fn serve<H>(self, _handler: H) -> Result<(), IpcError>
         where
-            H: Fn(DaemonRequest) -> DaemonResponse,
+            H: FnMut(DaemonRequest) -> DaemonResponse,
         {
             Err(IpcError::UnsupportedPlatform)
         }
 
         pub fn serve_one<H>(self, _handler: H) -> Result<(), IpcError>
         where
-            H: Fn(DaemonRequest) -> DaemonResponse,
+            H: FnMut(DaemonRequest) -> DaemonResponse,
         {
             Err(IpcError::UnsupportedPlatform)
         }
@@ -287,7 +287,7 @@ mod platform {
         #[cfg(test)]
         pub fn serve_n<H>(self, _request_count: usize, _handler: H) -> Result<(), IpcError>
         where
-            H: Fn(DaemonRequest) -> DaemonResponse,
+            H: FnMut(DaemonRequest) -> DaemonResponse,
         {
             Err(IpcError::UnsupportedPlatform)
         }
