@@ -7,12 +7,13 @@
 pub mod ipc;
 
 use blip_api::{
-    AgentBlip, AgentBlipListResponse, BlipListResponse, BlipRoutedResponse, BlipSummary,
-    CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode,
+    AgentBlip, AgentBlipListResponse, BlipDetail, BlipListResponse, BlipRoutedResponse,
+    BlipSummary, CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode,
     DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
     DaemonVersionResponse, HealthResponse, WorkspaceListResponse, WorkspaceSummary,
 };
 use blip_clipboard::{ClipboardError, ClipboardWatcher};
+use blip_core::Blip;
 use blip_core::{BlipError, BlipStore, ContentType, NewBlip};
 use chrono::Utc;
 use std::path::{Path, PathBuf};
@@ -202,6 +203,31 @@ where
                     ),
                 }
             }
+            (DaemonCommand::GetBlip, DaemonRequestPayload::GetBlip { blip_id }) => {
+                match self.store.get_blip(&blip_id) {
+                    Ok(Some(blip)) => DaemonResponse::ok(
+                        request_id,
+                        command,
+                        DaemonResponsePayload::Blip(blip_detail_from_store(blip)),
+                    ),
+                    Ok(None) => DaemonResponse::error(
+                        request_id,
+                        command,
+                        DaemonApiError::new(
+                            DaemonApiErrorCode::NotFound,
+                            format!("blip `{blip_id}` does not exist"),
+                        ),
+                    ),
+                    Err(error) => DaemonResponse::error(
+                        request_id,
+                        command,
+                        DaemonApiError::new(
+                            DaemonApiErrorCode::StoreUnavailable,
+                            error.to_string(),
+                        ),
+                    ),
+                }
+            }
             (
                 DaemonCommand::AgentRecentBlips,
                 DaemonRequestPayload::AgentRecentBlips { workspace, limit },
@@ -301,6 +327,22 @@ where
             .record_ingested(text, observed_at);
 
         Ok(())
+    }
+}
+
+fn blip_detail_from_store(blip: Blip) -> BlipDetail {
+    BlipDetail {
+        id: blip.id,
+        workspace: blip.workspace_name,
+        source_app: blip.source_app,
+        content_type: blip.content_type.as_str().to_owned(),
+        language: blip.language,
+        content: blip.content,
+        size_bytes: blip.size_bytes,
+        token_estimate: blip.token_estimate,
+        is_redacted: blip.is_redacted,
+        tags: blip.tags,
+        created_at: blip.created_at,
     }
 }
 
@@ -795,6 +837,84 @@ mod tests {
                     size_bytes: 11,
                 }],
             })),
+        );
+    }
+
+    #[test]
+    fn dispatch_returns_full_blip_detail_payload() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let inserted = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".to_owned(),
+                source_app: Some("Firefox".to_owned()),
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "sensitive copied text".to_owned(),
+                token_estimate: Some(3),
+                is_redacted: true,
+                tags: vec!["demo".to_owned()],
+            })
+            .expect("blip should be inserted");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "get-blip-1",
+            DaemonCommand::GetBlip,
+            DaemonRequestPayload::GetBlip {
+                blip_id: inserted.id.clone(),
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        assert_eq!(
+            response.payload,
+            Some(DaemonResponsePayload::Blip(BlipDetail {
+                id: inserted.id,
+                workspace: "inbox".to_owned(),
+                source_app: Some("Firefox".to_owned()),
+                content_type: "plain_text".to_owned(),
+                language: None,
+                content: "sensitive copied text".to_owned(),
+                size_bytes: 21,
+                token_estimate: Some(3),
+                is_redacted: true,
+                tags: vec!["demo".to_owned()],
+                created_at: inserted.created_at,
+            })),
+        );
+    }
+
+    #[test]
+    fn dispatch_returns_not_found_for_missing_blip_detail() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "get-blip-missing",
+            DaemonCommand::GetBlip,
+            DaemonRequestPayload::GetBlip {
+                blip_id: "missing".to_owned(),
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Error);
+        assert_eq!(
+            response.error.map(|error| error.code),
+            Some(DaemonApiErrorCode::NotFound)
         );
     }
 
