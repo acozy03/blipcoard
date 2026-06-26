@@ -163,6 +163,7 @@ pub enum AuditEventType {
     WorkspaceActivated,
     BlipIngested,
     BlipMoved,
+    BlipsRead,
 }
 
 impl AuditEventType {
@@ -173,6 +174,7 @@ impl AuditEventType {
             Self::WorkspaceActivated => "workspace_activated",
             Self::BlipIngested => "blip_ingested",
             Self::BlipMoved => "blip_moved",
+            Self::BlipsRead => "blips_read",
         }
     }
 
@@ -183,6 +185,7 @@ impl AuditEventType {
             "workspace_activated" => Ok(Self::WorkspaceActivated),
             "blip_ingested" => Ok(Self::BlipIngested),
             "blip_moved" => Ok(Self::BlipMoved),
+            "blips_read" => Ok(Self::BlipsRead),
             _ => Err(BlipError::InvalidPersistedValue {
                 field: "event_type",
                 value: value.to_owned(),

@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS audit_events (
       'workspace_created',
       'workspace_activated',
       'blip_ingested',
-      'blip_moved'
+      'blip_moved',
+      'blips_read'
     )
   ),
   target_blip_id TEXT,

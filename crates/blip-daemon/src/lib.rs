@@ -832,6 +832,16 @@ mod tests {
                 }],
             })),
         );
+
+        let audit_events = runtime
+            .store
+            .list_audit_events()
+            .expect("audit events should list");
+        assert!(audit_events.iter().any(|event| {
+            event.actor_type == blip_core::ActorType::Agent
+                && event.event_type == blip_core::AuditEventType::BlipsRead
+                && event.target_workspace.as_deref() == Some("agent-feed")
+        }));
     }
 
     #[test]
