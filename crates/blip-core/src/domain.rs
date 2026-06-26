@@ -107,6 +107,16 @@ pub struct Workspace {
     pub created_at: DateTime<Utc>,
 }
 
+impl Workspace {
+    pub fn require_agent_read_access(&self) -> Result<(), BlipError> {
+        if self.agent_access {
+            Ok(())
+        } else {
+            Err(BlipError::AgentAccessDenied(self.name.clone()))
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewWorkspace {
     pub name: String,
