@@ -7,13 +7,14 @@
 pub mod ipc;
 
 use blip_api::{
-    AgentBlip, AgentBlipListResponse, BlipDetail, BlipListResponse, BlipRoutedResponse,
-    BlipSummary, CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode,
-    DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
-    DaemonVersionResponse, HealthResponse, WorkspaceListResponse, WorkspaceSummary,
+    AgentBlip, AgentBlipListResponse, AuditEventListResponse, AuditEventSummary, BlipDetail,
+    BlipListResponse, BlipRoutedResponse, BlipSummary, CurrentWorkspaceResponse,
+    DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode, DaemonCommand, DaemonRequest,
+    DaemonRequestPayload, DaemonResponse, DaemonResponsePayload, DaemonVersionResponse,
+    HealthResponse, WorkspaceListResponse, WorkspaceSummary,
 };
 use blip_clipboard::{ClipboardError, ClipboardWatcher};
-use blip_core::Blip;
+use blip_core::{AuditEvent, Blip};
 use blip_core::{BlipError, BlipStore, ContentType, NewBlip};
 use chrono::Utc;
 use std::path::{Path, PathBuf};
@@ -228,6 +229,25 @@ where
                     ),
                 }
             }
+            (DaemonCommand::ListAuditEvents, DaemonRequestPayload::ListAuditEvents { limit }) => {
+                match self.store.list_audit_events_limited(limit) {
+                    Ok(events) => DaemonResponse::ok(
+                        request_id,
+                        command,
+                        DaemonResponsePayload::AuditEvents(AuditEventListResponse {
+                            events: events.into_iter().map(audit_event_summary).collect(),
+                        }),
+                    ),
+                    Err(error) => DaemonResponse::error(
+                        request_id,
+                        command,
+                        DaemonApiError::new(
+                            DaemonApiErrorCode::StoreUnavailable,
+                            error.to_string(),
+                        ),
+                    ),
+                }
+            }
             (
                 DaemonCommand::AgentRecentBlips,
                 DaemonRequestPayload::AgentRecentBlips { workspace, limit },
@@ -343,6 +363,19 @@ fn blip_detail_from_store(blip: Blip) -> BlipDetail {
         is_redacted: blip.is_redacted,
         tags: blip.tags,
         created_at: blip.created_at,
+    }
+}
+
+fn audit_event_summary(event: AuditEvent) -> AuditEventSummary {
+    AuditEventSummary {
+        id: event.id,
+        actor_type: event.actor_type.as_str().to_owned(),
+        actor_id: event.actor_id,
+        event_type: event.event_type.as_str().to_owned(),
+        target_blip_id: event.target_blip_id,
+        target_workspace: event.target_workspace,
+        details_json: event.details_json,
+        created_at: event.created_at,
     }
 }
 
@@ -889,6 +922,39 @@ mod tests {
                 created_at: inserted.created_at,
             })),
         );
+    }
+
+    #[test]
+    fn dispatch_returns_recent_audit_events_payload() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "audit-events-1",
+            DaemonCommand::ListAuditEvents,
+            DaemonRequestPayload::ListAuditEvents { limit: 5 },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        match response.payload {
+            Some(DaemonResponsePayload::AuditEvents(audit_events)) => {
+                assert!(!audit_events.events.is_empty());
+                assert!(
+                    audit_events
+                        .events
+                        .iter()
+                        .any(|event| event.event_type == "schema_initialized")
+                );
+            }
+            other => panic!("expected audit events response, got {other:?}"),
+        }
     }
 
     #[test]

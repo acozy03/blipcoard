@@ -1,8 +1,8 @@
 use blip_api::{
-    AgentBlipListResponse, BlipDetail, BlipListResponse, BlipRoutedResponse,
-    CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonCommand, DaemonRequest,
-    DaemonRequestPayload, DaemonResponse, DaemonResponsePayload, DaemonResponseStatus,
-    DaemonVersionResponse, HealthResponse, WorkspaceListResponse,
+    AgentBlipListResponse, AuditEventListResponse, BlipDetail, BlipListResponse,
+    BlipRoutedResponse, CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError,
+    DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
+    DaemonResponseStatus, DaemonVersionResponse, HealthResponse, WorkspaceListResponse,
 };
 use blip_config::{BlipConfig, ConfigError};
 use std::error::Error;
@@ -146,6 +146,22 @@ impl DaemonClient {
             Some(DaemonResponsePayload::Blip(blip)) => Ok(blip),
             other => Err(DaemonClientError::UnexpectedPayload {
                 command: DaemonCommand::GetBlip,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn audit_events(&self, limit: usize) -> Result<AuditEventListResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("audit-events"),
+            DaemonCommand::ListAuditEvents,
+            DaemonRequestPayload::ListAuditEvents { limit },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::AuditEvents(events)) => Ok(events),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::ListAuditEvents,
                 payload: payload_name(other.as_ref()),
             }),
         }
@@ -344,6 +360,7 @@ fn payload_name(payload: Option<&DaemonResponsePayload>) -> &'static str {
         Some(DaemonResponsePayload::Workspaces(_)) => "workspaces",
         Some(DaemonResponsePayload::Blips(_)) => "blips",
         Some(DaemonResponsePayload::Blip(_)) => "blip",
+        Some(DaemonResponsePayload::AuditEvents(_)) => "audit_events",
         Some(DaemonResponsePayload::AgentBlips(_)) => "agent_blips",
         Some(DaemonResponsePayload::BlipRouted(_)) => "blip_routed",
         None => "none",
