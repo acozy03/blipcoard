@@ -163,11 +163,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             match output {
                 OutputFormat::Human => {
                     for blip in blips.blips {
-                        println!(
-                            "{} :: {}",
-                            blip.id,
-                            format_preview(&blip.preview, blip.size_bytes)
-                        );
+                        println!("{}", format_blip_summary(&blip));
                     }
                 }
                 OutputFormat::Json => {
@@ -185,11 +181,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             match output {
                 OutputFormat::Human => {
                     for blip in blips.blips {
-                        println!(
-                            "{} :: {}",
-                            blip.id,
-                            format_preview(&blip.preview, blip.size_bytes)
-                        );
+                        println!("{}", format_blip_summary(&blip));
                     }
                 }
                 OutputFormat::Json => {
@@ -311,4 +303,25 @@ fn format_preview(preview: &str, size_bytes: i64) -> String {
     } else {
         preview.to_owned()
     }
+}
+
+fn format_blip_summary(blip: &blip_api::BlipSummary) -> String {
+    let flags = blip_summary_flags(blip);
+    let preview = format_preview(&blip.preview, blip.size_bytes);
+    if flags.is_empty() {
+        format!("{} :: {preview}", blip.id)
+    } else {
+        format!("{} {} :: {preview}", blip.id, flags.join(" "))
+    }
+}
+
+fn blip_summary_flags(blip: &blip_api::BlipSummary) -> Vec<&'static str> {
+    let mut flags = Vec::new();
+    if blip.is_redacted {
+        flags.push("[redacted]");
+    }
+    if blip.tags.iter().any(|tag| tag == blip_core::SECRET_TAG) {
+        flags.push("[secret]");
+    }
+    flags
 }

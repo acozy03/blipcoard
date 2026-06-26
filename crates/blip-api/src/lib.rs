@@ -187,6 +187,10 @@ pub struct BlipSummary {
     pub id: String,
     pub preview: String,
     pub size_bytes: i64,
+    #[serde(default)]
+    pub is_redacted: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -623,6 +627,91 @@ mod tests {
         let decoded =
             serde_json::from_value::<DaemonResponse>(value).expect("blip response should decode");
         assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn blip_list_response_json_shape_round_trips_with_flags() {
+        let response = DaemonResponse::ok(
+            "request-list-blips",
+            DaemonCommand::ListBlips,
+            DaemonResponsePayload::Blips(BlipListResponse {
+                workspace: "inbox".to_owned(),
+                blips: vec![BlipSummary {
+                    id: "blip-1".to_owned(),
+                    preview: "api_key = abcdef1234567890".to_owned(),
+                    size_bytes: 28,
+                    is_redacted: false,
+                    tags: vec!["secret".to_owned(), "secret:assignment".to_owned()],
+                }],
+            }),
+        );
+
+        let value = serde_json::to_value(&response).expect("blip list response should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-list-blips",
+                "command": "list_blips",
+                "status": "ok",
+                "payload": {
+                    "blips": {
+                        "workspace": "inbox",
+                        "blips": [{
+                            "id": "blip-1",
+                            "preview": "api_key = abcdef1234567890",
+                            "size_bytes": 28,
+                            "is_redacted": false,
+                            "tags": ["secret", "secret:assignment"],
+                        }],
+                    }
+                },
+                "error": null,
+            })
+        );
+
+        let decoded = serde_json::from_value::<DaemonResponse>(value)
+            .expect("blip list response should decode");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn blip_list_response_decodes_legacy_summaries_without_flags() {
+        let value = json!({
+            "api_version": 1,
+            "request_id": "request-list-blips",
+            "command": "list_blips",
+            "status": "ok",
+            "payload": {
+                "blips": {
+                    "workspace": "inbox",
+                    "blips": [{
+                        "id": "blip-1",
+                        "preview": "copied text",
+                        "size_bytes": 11,
+                    }],
+                }
+            },
+            "error": null,
+        });
+
+        let decoded =
+            serde_json::from_value::<DaemonResponse>(value).expect("legacy response should decode");
+
+        assert_eq!(
+            decoded.payload,
+            Some(DaemonResponsePayload::Blips(BlipListResponse {
+                workspace: "inbox".to_owned(),
+                blips: vec![BlipSummary {
+                    id: "blip-1".to_owned(),
+                    preview: "copied text".to_owned(),
+                    size_bytes: 11,
+                    is_redacted: false,
+                    tags: Vec::new(),
+                }],
+            }))
+        );
     }
 
     #[test]
