@@ -45,6 +45,7 @@ pub enum DaemonCommand {
     ListWorkspaces,
     ListBlips,
     GetBlip,
+    ListAuditEvents,
     RouteBlip,
     RouteLatestInboxBlip,
     AgentRecentBlips,
@@ -60,6 +61,7 @@ impl DaemonCommand {
             Self::ListWorkspaces => "list_workspaces",
             Self::ListBlips => "list_blips",
             Self::GetBlip => "get_blip",
+            Self::ListAuditEvents => "list_audit_events",
             Self::RouteBlip => "route_blip",
             Self::RouteLatestInboxBlip => "route_latest_inbox_blip",
             Self::AgentRecentBlips => "agent_recent_blips",
@@ -77,6 +79,7 @@ pub enum DaemonRequestPayload {
     ListWorkspaces,
     ListBlips { workspace: String, limit: usize },
     GetBlip { blip_id: String },
+    ListAuditEvents { limit: usize },
     RouteBlip { blip_id: String, workspace: String },
     RouteLatestInboxBlip { workspace: String },
     AgentRecentBlips { workspace: String, limit: usize },
@@ -141,6 +144,7 @@ pub enum DaemonResponsePayload {
     Workspaces(WorkspaceListResponse),
     Blips(BlipListResponse),
     Blip(BlipDetail),
+    AuditEvents(AuditEventListResponse),
     AgentBlips(AgentBlipListResponse),
     BlipRouted(BlipRoutedResponse),
 }
@@ -192,6 +196,23 @@ pub struct BlipDetail {
     pub token_estimate: Option<i64>,
     pub is_redacted: bool,
     pub tags: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditEventListResponse {
+    pub events: Vec<AuditEventSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditEventSummary {
+    pub id: String,
+    pub actor_type: String,
+    pub actor_id: Option<String>,
+    pub event_type: String,
+    pub target_blip_id: Option<String>,
+    pub target_workspace: Option<String>,
+    pub details_json: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

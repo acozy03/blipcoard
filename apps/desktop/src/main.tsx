@@ -15,8 +15,10 @@ import {
   activateWorkspace,
   currentWorkspace,
   getBlip,
+  listAuditEvents,
   listWorkspaceBlips,
   listWorkspaces,
+  type AuditEventSummary,
   type BlipDetail,
   type BlipSummary,
   type WorkspaceSummary
@@ -44,6 +46,11 @@ type DetailState =
   | { status: "ready"; blip: BlipDetail }
   | { status: "error"; blipId: string; message: string };
 
+type AuditState =
+  | { status: "loading" }
+  | { status: "ready"; events: AuditEventSummary[] }
+  | { status: "error"; message: string };
+
 function App() {
   const [workspaceState, setWorkspaceState] = React.useState<WorkspaceState>({
     status: "loading"
@@ -55,6 +62,7 @@ function App() {
   const [blipState, setBlipState] = React.useState<BlipState>({ status: "idle" });
   const [selectedBlipId, setSelectedBlipId] = React.useState<string | null>(null);
   const [detailState, setDetailState] = React.useState<DetailState>({ status: "idle" });
+  const [auditState, setAuditState] = React.useState<AuditState>({ status: "loading" });
 
   React.useEffect(() => {
     selectedWorkspaceRef.current = selectedWorkspace;
@@ -111,8 +119,19 @@ function App() {
       });
   }, [loadDetail]);
 
+  const loadAudit = React.useCallback(() => {
+    setAuditState({ status: "loading" });
+    listAuditEvents()
+      .then((response) => setAuditState({ status: "ready", events: response.events }))
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "Unable to load audit events";
+        setAuditState({ status: "error", message });
+      });
+  }, []);
+
   const refresh = React.useCallback(() => {
     setWorkspaceState({ status: "loading" });
+    loadAudit();
     Promise.all([listWorkspaces(), currentWorkspace()])
       .then(([workspaceResponse, currentResponse]) => {
         const workspaces = workspaceResponse.workspaces;
@@ -142,7 +161,7 @@ function App() {
         setSelectedBlipId(null);
         setDetailState({ status: "idle" });
       });
-  }, [loadBlips]);
+  }, [loadAudit, loadBlips]);
 
   React.useEffect(() => {
     refresh();
@@ -161,12 +180,13 @@ function App() {
     }
 
     activateWorkspace(selectedWorkspace)
-      .then((response) =>
+      .then((response) => {
         setWorkspaceState({
           ...workspaceState,
           activeWorkspace: response.active_workspace
-        })
-      )
+        });
+        loadAudit();
+      })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : "Unable to activate workspace";
         setWorkspaceState({ status: "error", message });
@@ -238,9 +258,64 @@ function App() {
               state={detailState}
             />
           </div>
+          <AuditPanel state={auditState} />
         </section>
       </section>
     </main>
+  );
+}
+
+function AuditPanel({ state }: { state: AuditState }) {
+  if (state.status === "loading") {
+    return (
+      <section className="audit-panel">
+        <AuditHeader />
+        <LoadingState label="Loading audit" />
+      </section>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <section className="audit-panel">
+        <AuditHeader />
+        <ErrorState message={state.message} />
+      </section>
+    );
+  }
+
+  return (
+    <section className="audit-panel">
+      <AuditHeader />
+      {state.events.length === 0 ? (
+        <EmptyState title="No audit events" />
+      ) : (
+        <div className="audit-list">
+          {state.events.map((event) => (
+            <article className="audit-row" key={event.id}>
+              <div className="audit-main">
+                <h3>{formatAuditEvent(event.event_type)}</h3>
+                <p>{formatAuditTarget(event)}</p>
+              </div>
+              <div className="audit-meta">
+                <span>{formatAuditActor(event)}</span>
+                <time dateTime={event.created_at}>{formatTimestamp(event.created_at)}</time>
+              </div>
+              {event.details_json ? <code>{formatAuditDetails(event.details_json)}</code> : null}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AuditHeader() {
+  return (
+    <header className="audit-header">
+      <h2>Audit</h2>
+      <p>Recent events</p>
+    </header>
   );
 }
 
@@ -521,6 +596,31 @@ function workspaceStatusLabel(state: WorkspaceState, selectedWorkspace: string |
 
 function formatMetadata(value: string) {
   return value.replaceAll("_", " ");
+}
+
+function formatAuditEvent(value: string) {
+  return formatMetadata(value).replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatAuditActor(event: AuditEventSummary) {
+  return event.actor_id ? `${event.actor_type}:${event.actor_id}` : event.actor_type;
+}
+
+function formatAuditTarget(event: AuditEventSummary) {
+  if (event.target_blip_id && event.target_workspace) {
+    return `${event.target_blip_id} / ${event.target_workspace}`;
+  }
+
+  return event.target_blip_id ?? event.target_workspace ?? "No target";
+}
+
+function formatAuditDetails(detailsJson: string) {
+  try {
+    const parsed = JSON.parse(detailsJson) as unknown;
+    return JSON.stringify(parsed);
+  } catch {
+    return detailsJson;
+  }
 }
 
 function formatTimestamp(value: string) {

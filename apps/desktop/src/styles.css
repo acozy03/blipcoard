@@ -437,6 +437,103 @@ button {
   grid-column: 1 / -1;
 }
 
+.audit-panel {
+  max-width: 1220px;
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.audit-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #d9dfd6;
+}
+
+.audit-header h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.audit-header p {
+  margin: 0;
+  color: #667169;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.audit-list {
+  display: grid;
+  gap: 8px;
+}
+
+.audit-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 14px;
+  padding: 11px 12px;
+  border: 1px solid #d9dfd6;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.audit-main {
+  min-width: 0;
+}
+
+.audit-main h3 {
+  margin: 0 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.audit-main p,
+.audit-meta {
+  color: #667169;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.audit-main p {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-meta {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.audit-row code {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 7px 8px;
+  border-radius: 6px;
+  background: #f8faf5;
+  color: #526057;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
 .state-panel,
 .empty-state {
   min-height: 160px;
@@ -550,6 +647,14 @@ button {
 
   .metadata-grid {
     grid-template-columns: 1fr;
+  }
+
+  .audit-row {
+    grid-template-columns: 1fr;
+  }
+
+  .audit-meta {
+    justify-items: start;
   }
 
   .workspace-header {

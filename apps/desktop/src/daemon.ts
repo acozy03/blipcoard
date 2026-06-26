@@ -18,6 +18,17 @@ export type BlipDetail = {
   created_at: string;
 };
 
+export type AuditEventSummary = {
+  id: string;
+  actor_type: string;
+  actor_id: string | null;
+  event_type: string;
+  target_blip_id: string | null;
+  target_workspace: string | null;
+  details_json: string | null;
+  created_at: string;
+};
+
 export type WorkspaceSummary = {
   name: string;
   agent_access: boolean;
@@ -34,6 +45,10 @@ export type WorkspaceListResponse = {
 export type BlipListResponse = {
   workspace: string;
   blips: BlipSummary[];
+};
+
+export type AuditEventListResponse = {
+  events: AuditEventSummary[];
 };
 
 type TauriCore = {
@@ -138,6 +153,39 @@ const DEV_DETAILS: Record<string, BlipDetail> = {
   }
 };
 
+const DEV_AUDIT_EVENTS: AuditEventSummary[] = [
+  {
+    id: "audit-dev-1",
+    actor_type: "agent",
+    actor_id: "codex",
+    event_type: "blips_read",
+    target_blip_id: null,
+    target_workspace: "agent-feed",
+    details_json: "{\"limit\":50}",
+    created_at: "2026-06-26T17:36:00Z"
+  },
+  {
+    id: "audit-dev-2",
+    actor_type: "user",
+    actor_id: null,
+    event_type: "blip_moved",
+    target_blip_id: "dev-inbox-1",
+    target_workspace: "auth-bug",
+    details_json: "{\"from_workspace\":\"inbox\",\"to_workspace\":\"auth-bug\"}",
+    created_at: "2026-06-26T17:35:00Z"
+  },
+  {
+    id: "audit-dev-3",
+    actor_type: "user",
+    actor_id: null,
+    event_type: "workspace_activated",
+    target_blip_id: null,
+    target_workspace: "auth-bug",
+    details_json: null,
+    created_at: "2026-06-26T17:34:00Z"
+  }
+];
+
 let devActiveWorkspace = "inbox";
 
 export async function currentWorkspace(): Promise<CurrentWorkspaceResponse> {
@@ -191,6 +239,17 @@ export async function getBlip(blipId: string): Promise<BlipDetail> {
   }
 
   return blip;
+}
+
+export async function listAuditEvents(limit = 25): Promise<AuditEventListResponse> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    return invoke<AuditEventListResponse>("list_audit_events", { limit });
+  }
+
+  await devDelay();
+  return { events: DEV_AUDIT_EVENTS.slice(0, limit) };
 }
 
 export async function activateWorkspace(workspace: string): Promise<CurrentWorkspaceResponse> {
