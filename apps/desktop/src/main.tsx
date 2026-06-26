@@ -130,6 +130,8 @@ function App() {
       ? workspaceState.workspaces.find((workspace) => workspace.name === selectedWorkspace)
       : null;
   const statusLabel = workspaceStatusLabel(workspaceState, selectedWorkspace);
+  const activeWorkspace =
+    workspaceState.status === "ready" ? workspaceState.activeWorkspace : null;
 
   return (
     <main className="app-shell">
@@ -141,9 +143,12 @@ function App() {
             <p>{statusLabel}</p>
           </div>
         </div>
-        <button className="icon-button" type="button" onClick={refresh} aria-label="Refresh">
-          <RefreshCw aria-hidden="true" size={18} />
-        </button>
+        <div className="topbar-actions">
+          <ActiveWorkspaceBadge state={workspaceState.status} workspace={activeWorkspace} />
+          <button className="icon-button" type="button" onClick={refresh} aria-label="Refresh">
+            <RefreshCw aria-hidden="true" size={18} />
+          </button>
+        </div>
       </header>
 
       <section className="workspace-layout" aria-live="polite">
@@ -174,6 +179,25 @@ function App() {
         </section>
       </section>
     </main>
+  );
+}
+
+function ActiveWorkspaceBadge({
+  state,
+  workspace
+}: {
+  state: WorkspaceState["status"];
+  workspace: string | null;
+}) {
+  const label =
+    state === "loading" ? "Loading" : state === "error" ? "Unavailable" : (workspace ?? "None");
+
+  return (
+    <div className="active-badge" aria-live="polite">
+      <CheckCircle2 aria-hidden="true" size={15} />
+      <span>Active</span>
+      <strong>{label}</strong>
+    </div>
   );
 }
 
