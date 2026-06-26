@@ -65,6 +65,12 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
         .stdout(predicate::str::contains("created blip"));
 
     blip_command(&db_path)
+        .args(["add-demo", "agent-feed", "Rollback deployment note"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("created blip"));
+
+    blip_command(&db_path)
         .args(["add-demo", "inbox", "Copied inbox note"])
         .assert()
         .success()
@@ -116,6 +122,25 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
         .success()
         .stdout(predicate::str::contains("TypeError: broken login flow"));
 
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["search", "auth-bug", "login"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("TypeError: broken login flow"));
+
+    let auth_search = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["search", "auth-bug", "login", "--output", "json"],
+    );
+    assert_eq!(auth_search["workspace"], "auth-bug");
+    assert!(
+        auth_search["blips"]
+            .as_array()
+            .expect("search blips should be an array")
+            .iter()
+            .any(|blip| blip["preview"] == "TypeError: broken login flow")
+    );
+
     let agent_recent = assert_json_success(
         blip_command_with_socket(&db_path, &socket_path),
         &["agent", "recent", "agent-feed", "--output", "json"],
@@ -129,8 +154,37 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
             .any(|blip| blip["content"] == "Agent-visible deployment note")
     );
 
+    let agent_search = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &[
+            "agent",
+            "search",
+            "agent-feed",
+            "rollback",
+            "--output",
+            "json",
+        ],
+    );
+    assert_eq!(agent_search["workspace"], "agent-feed");
+    assert!(
+        agent_search["blips"]
+            .as_array()
+            .expect("agent search blips should be an array")
+            .iter()
+            .any(|blip| blip["content"] == "Rollback deployment note")
+    );
+
     blip_command_with_socket(&db_path, &socket_path)
         .args(["agent", "recent", "auth-bug"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "daemon returned access_denied: agent access to workspace `auth-bug` is denied",
+        ));
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["agent", "search", "auth-bug", "login"])
         .assert()
         .failure()
         .stdout(predicate::str::is_empty())

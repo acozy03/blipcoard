@@ -51,6 +51,14 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         output: OutputFormat,
     },
+    Search {
+        workspace: String,
+        query: String,
+        #[arg(long, default_value_t = DEFAULT_LIST_LIMIT)]
+        limit: usize,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
     Create {
         name: String,
         #[arg(long)]
@@ -86,6 +94,14 @@ enum Commands {
 enum AgentCommands {
     Recent {
         workspace: String,
+        #[arg(long, default_value_t = DEFAULT_LIST_LIMIT)]
+        limit: usize,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
+    Search {
+        workspace: String,
+        query: String,
         #[arg(long, default_value_t = DEFAULT_LIST_LIMIT)]
         limit: usize,
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
@@ -178,17 +194,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             output,
         } => {
             let blips = DaemonClient::from_config(&config)?.blips(&workspace, limit)?;
-            match output {
-                OutputFormat::Human => {
-                    for blip in blips.blips {
-                        println!("{}", format_blip_summary(&blip));
-                    }
-                }
-                OutputFormat::Json => {
-                    serde_json::to_writer(io::stdout().lock(), &blips)?;
-                    println!();
-                }
-            }
+            print_blip_list_response(blips, output)?;
+        }
+        Commands::Search {
+            workspace,
+            query,
+            limit,
+            output,
+        } => {
+            let blips =
+                DaemonClient::from_config(&config)?.search_blips(&workspace, &query, limit)?;
+            print_blip_list_response(blips, output)?;
         }
         Commands::Create {
             name,
@@ -250,6 +266,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     DaemonClient::from_config(&config)?.agent_recent_blips(&workspace, limit)?;
                 print_agent_blip_list_response(blips, output)?;
             }
+            AgentCommands::Search {
+                workspace,
+                query,
+                limit,
+                output,
+            } => {
+                let blips = DaemonClient::from_config(&config)?
+                    .agent_search_blips(&workspace, &query, limit)?;
+                print_agent_blip_list_response(blips, output)?;
+            }
         },
         Commands::AddDemo {
             workspace,
@@ -286,6 +312,25 @@ fn print_agent_blip_list_response(
                     blip.id,
                     format_preview(&blip.content, blip.size_bytes)
                 );
+            }
+        }
+        OutputFormat::Json => {
+            serde_json::to_writer(io::stdout().lock(), &response)?;
+            println!();
+        }
+    }
+
+    Ok(())
+}
+
+fn print_blip_list_response(
+    response: blip_api::BlipListResponse,
+    output: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match output {
+        OutputFormat::Human => {
+            for blip in response.blips {
+                println!("{}", format_blip_summary(&blip));
             }
         }
         OutputFormat::Json => {

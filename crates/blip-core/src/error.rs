@@ -20,6 +20,9 @@ pub enum BlipError {
         reason: &'static str,
     },
 
+    #[error("invalid search query: {0}")]
+    InvalidSearchQuery(String),
+
     #[error("workspace `{0}` does not exist")]
     WorkspaceNotFound(String),
 

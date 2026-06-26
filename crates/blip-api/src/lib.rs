@@ -45,11 +45,13 @@ pub enum DaemonCommand {
     SetStickyCapture,
     ListWorkspaces,
     ListBlips,
+    SearchBlips,
     GetBlip,
     ListAuditEvents,
     RouteBlip,
     RouteLatestInboxBlip,
     AgentRecentBlips,
+    AgentSearchBlips,
 }
 
 impl DaemonCommand {
@@ -62,11 +64,13 @@ impl DaemonCommand {
             Self::SetStickyCapture => "set_sticky_capture",
             Self::ListWorkspaces => "list_workspaces",
             Self::ListBlips => "list_blips",
+            Self::SearchBlips => "search_blips",
             Self::GetBlip => "get_blip",
             Self::ListAuditEvents => "list_audit_events",
             Self::RouteBlip => "route_blip",
             Self::RouteLatestInboxBlip => "route_latest_inbox_blip",
             Self::AgentRecentBlips => "agent_recent_blips",
+            Self::AgentSearchBlips => "agent_search_blips",
         }
     }
 }
@@ -77,15 +81,45 @@ pub enum DaemonRequestPayload {
     Health,
     Version,
     CurrentWorkspace,
-    ActivateWorkspace { workspace: String },
-    SetStickyCapture { workspace: String, enabled: bool },
+    ActivateWorkspace {
+        workspace: String,
+    },
+    SetStickyCapture {
+        workspace: String,
+        enabled: bool,
+    },
     ListWorkspaces,
-    ListBlips { workspace: String, limit: usize },
-    GetBlip { blip_id: String },
-    ListAuditEvents { limit: usize },
-    RouteBlip { blip_id: String, workspace: String },
-    RouteLatestInboxBlip { workspace: String },
-    AgentRecentBlips { workspace: String, limit: usize },
+    ListBlips {
+        workspace: String,
+        limit: usize,
+    },
+    SearchBlips {
+        workspace: String,
+        query: String,
+        limit: usize,
+    },
+    GetBlip {
+        blip_id: String,
+    },
+    ListAuditEvents {
+        limit: usize,
+    },
+    RouteBlip {
+        blip_id: String,
+        workspace: String,
+    },
+    RouteLatestInboxBlip {
+        workspace: String,
+    },
+    AgentRecentBlips {
+        workspace: String,
+        limit: usize,
+    },
+    AgentSearchBlips {
+        workspace: String,
+        query: String,
+        limit: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -474,6 +508,41 @@ mod tests {
     }
 
     #[test]
+    fn search_blips_request_json_shape_round_trips() {
+        let request = DaemonRequest::new(
+            "request-search",
+            DaemonCommand::SearchBlips,
+            DaemonRequestPayload::SearchBlips {
+                workspace: "auth-bug".to_owned(),
+                query: "login".to_owned(),
+                limit: 10,
+            },
+        );
+
+        let value = serde_json::to_value(&request).expect("search request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-search",
+                "command": "search_blips",
+                "payload": {
+                    "search_blips": {
+                        "workspace": "auth-bug",
+                        "query": "login",
+                        "limit": 10,
+                    }
+                },
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<DaemonRequest>(value).expect("search request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
     fn route_blip_request_json_shape_round_trips() {
         let request = DaemonRequest::new(
             "request-route-id",
@@ -744,6 +813,41 @@ mod tests {
 
         let decoded = serde_json::from_value::<DaemonRequest>(value)
             .expect("agent recent request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn agent_search_blips_request_json_shape_round_trips() {
+        let request = DaemonRequest::new(
+            "request-agent-search",
+            DaemonCommand::AgentSearchBlips,
+            DaemonRequestPayload::AgentSearchBlips {
+                workspace: "agent-feed".to_owned(),
+                query: "deploy".to_owned(),
+                limit: 10,
+            },
+        );
+
+        let value = serde_json::to_value(&request).expect("agent search request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-agent-search",
+                "command": "agent_search_blips",
+                "payload": {
+                    "agent_search_blips": {
+                        "workspace": "agent-feed",
+                        "query": "deploy",
+                        "limit": 10,
+                    }
+                },
+            })
+        );
+
+        let decoded = serde_json::from_value::<DaemonRequest>(value)
+            .expect("agent search request should decode");
         assert_eq!(decoded, request);
     }
 
