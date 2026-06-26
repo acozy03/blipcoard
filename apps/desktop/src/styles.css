@@ -437,6 +437,7 @@ button {
   grid-column: 1 / -1;
 }
 
+.shortcut-panel,
 .audit-panel {
   max-width: 1220px;
   display: grid;
@@ -444,6 +445,7 @@ button {
   margin-top: 16px;
 }
 
+.shortcut-header,
 .audit-header {
   display: flex;
   align-items: baseline;
@@ -453,6 +455,7 @@ button {
   border-top: 1px solid #d9dfd6;
 }
 
+.shortcut-header h2,
 .audit-header h2 {
   margin: 0;
   font-size: 16px;
@@ -461,11 +464,95 @@ button {
   letter-spacing: 0;
 }
 
+.shortcut-header p,
 .audit-header p {
   margin: 0;
   color: #667169;
   font-size: 12px;
   line-height: 1.2;
+}
+
+.shortcut-list {
+  display: grid;
+  gap: 8px;
+}
+
+.shortcut-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid #d9dfd6;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.shortcut-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.shortcut-title > svg {
+  flex: 0 0 auto;
+  color: #2f6f5e;
+}
+
+.shortcut-title h3 {
+  margin: 0 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.shortcut-title p,
+.shortcut-message {
+  margin: 0;
+  color: #667169;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.shortcut-row kbd {
+  padding: 5px 8px;
+  border: 1px solid #cdd6cc;
+  border-radius: 6px;
+  background: #f8faf5;
+  color: #26302b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.shortcut-state {
+  padding: 5px 8px;
+  border: 1px solid #b9d2c5;
+  border-radius: 6px;
+  background: #edf7f0;
+  color: #2a5f52;
+  font-size: 12px;
+  line-height: 1.1;
+  font-weight: 650;
+  text-transform: capitalize;
+}
+
+.shortcut-state.conflict,
+.shortcut-state.unsupported {
+  border-color: #e0b4aa;
+  background: #fff8f6;
+  color: #9a3324;
+}
+
+.shortcut-message {
+  grid-column: 1 / -1;
 }
 
 .audit-list {
@@ -651,6 +738,16 @@ button {
 
   .audit-row {
     grid-template-columns: 1fr;
+  }
+
+  .shortcut-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .shortcut-row kbd,
+  .shortcut-state {
+    justify-self: start;
   }
 
   .audit-meta {

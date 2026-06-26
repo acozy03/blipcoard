@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Inbox,
+  Keyboard,
   Loader2,
   RefreshCw,
   Shield,
@@ -18,9 +19,11 @@ import {
   listAuditEvents,
   listWorkspaceBlips,
   listWorkspaces,
+  registerGlobalShortcuts,
   type AuditEventSummary,
   type BlipDetail,
   type BlipSummary,
+  type ShortcutRegistration,
   type WorkspaceSummary
 } from "./daemon";
 import "./styles.css";
@@ -51,6 +54,11 @@ type AuditState =
   | { status: "ready"; events: AuditEventSummary[] }
   | { status: "error"; message: string };
 
+type ShortcutState =
+  | { status: "loading" }
+  | { status: "ready"; shortcuts: ShortcutRegistration[] }
+  | { status: "error"; message: string };
+
 function App() {
   const [workspaceState, setWorkspaceState] = React.useState<WorkspaceState>({
     status: "loading"
@@ -63,6 +71,7 @@ function App() {
   const [selectedBlipId, setSelectedBlipId] = React.useState<string | null>(null);
   const [detailState, setDetailState] = React.useState<DetailState>({ status: "idle" });
   const [auditState, setAuditState] = React.useState<AuditState>({ status: "loading" });
+  const [shortcutState, setShortcutState] = React.useState<ShortcutState>({ status: "loading" });
 
   React.useEffect(() => {
     selectedWorkspaceRef.current = selectedWorkspace;
@@ -129,9 +138,22 @@ function App() {
       });
   }, []);
 
+  const loadShortcuts = React.useCallback(() => {
+    setShortcutState({ status: "loading" });
+    registerGlobalShortcuts()
+      .then((response) =>
+        setShortcutState({ status: "ready", shortcuts: response.shortcuts })
+      )
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "Unable to register shortcuts";
+        setShortcutState({ status: "error", message });
+      });
+  }, []);
+
   const refresh = React.useCallback(() => {
     setWorkspaceState({ status: "loading" });
     loadAudit();
+    loadShortcuts();
     Promise.all([listWorkspaces(), currentWorkspace()])
       .then(([workspaceResponse, currentResponse]) => {
         const workspaces = workspaceResponse.workspaces;
@@ -161,7 +183,7 @@ function App() {
         setSelectedBlipId(null);
         setDetailState({ status: "idle" });
       });
-  }, [loadAudit, loadBlips]);
+  }, [loadAudit, loadBlips, loadShortcuts]);
 
   React.useEffect(() => {
     refresh();
@@ -258,10 +280,62 @@ function App() {
               state={detailState}
             />
           </div>
+          <ShortcutPanel state={shortcutState} />
           <AuditPanel state={auditState} />
         </section>
       </section>
     </main>
+  );
+}
+
+function ShortcutPanel({ state }: { state: ShortcutState }) {
+  if (state.status === "loading") {
+    return (
+      <section className="shortcut-panel">
+        <ShortcutHeader />
+        <LoadingState label="Loading shortcuts" />
+      </section>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <section className="shortcut-panel">
+        <ShortcutHeader />
+        <ErrorState message={state.message} />
+      </section>
+    );
+  }
+
+  return (
+    <section className="shortcut-panel">
+      <ShortcutHeader />
+      <div className="shortcut-list">
+        {state.shortcuts.map((shortcut) => (
+          <article className="shortcut-row" key={shortcut.id}>
+            <div className="shortcut-title">
+              <Keyboard aria-hidden="true" size={17} />
+              <div>
+                <h3>{shortcut.label}</h3>
+                <p>{formatShortcutAction(shortcut.action)}</p>
+              </div>
+            </div>
+            <kbd>{shortcut.accelerator}</kbd>
+            <span className={`shortcut-state ${shortcut.state}`}>{shortcut.state}</span>
+            {shortcut.message ? <p className="shortcut-message">{shortcut.message}</p> : null}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ShortcutHeader() {
+  return (
+    <header className="shortcut-header">
+      <h2>Shortcuts</h2>
+      <p>Routing actions</p>
+    </header>
   );
 }
 
@@ -621,6 +695,10 @@ function formatAuditDetails(detailsJson: string) {
   } catch {
     return detailsJson;
   }
+}
+
+function formatShortcutAction(value: ShortcutRegistration["action"]) {
+  return formatMetadata(value);
 }
 
 function formatTimestamp(value: string) {
