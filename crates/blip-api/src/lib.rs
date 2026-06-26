@@ -46,6 +46,7 @@ pub enum DaemonCommand {
     ListBlips,
     RouteBlip,
     RouteLatestInboxBlip,
+    AgentRecentBlips,
 }
 
 impl DaemonCommand {
@@ -59,6 +60,7 @@ impl DaemonCommand {
             Self::ListBlips => "list_blips",
             Self::RouteBlip => "route_blip",
             Self::RouteLatestInboxBlip => "route_latest_inbox_blip",
+            Self::AgentRecentBlips => "agent_recent_blips",
         }
     }
 }
@@ -74,6 +76,7 @@ pub enum DaemonRequestPayload {
     ListBlips { workspace: String, limit: usize },
     RouteBlip { blip_id: String, workspace: String },
     RouteLatestInboxBlip { workspace: String },
+    AgentRecentBlips { workspace: String, limit: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +137,7 @@ pub enum DaemonResponsePayload {
     WorkspaceActivated(CurrentWorkspaceResponse),
     Workspaces(WorkspaceListResponse),
     Blips(BlipListResponse),
+    AgentBlips(AgentBlipListResponse),
     BlipRouted(BlipRoutedResponse),
 }
 
@@ -173,6 +177,19 @@ pub struct BlipSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentBlipListResponse {
+    pub workspace: String,
+    pub blips: Vec<AgentBlip>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentBlip {
+    pub id: String,
+    pub content: String,
+    pub size_bytes: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlipRoutedResponse {
     pub id: String,
     pub from_workspace: String,
@@ -200,6 +217,7 @@ pub enum DaemonApiErrorCode {
     UnsupportedApiVersion,
     InvalidRequest,
     NotFound,
+    AccessDenied,
     StoreUnavailable,
     Internal,
 }
@@ -473,6 +491,82 @@ mod tests {
 
         let decoded =
             serde_json::from_value::<DaemonResponse>(value).expect("route response should decode");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn agent_recent_blips_request_json_shape_round_trips() {
+        let request = DaemonRequest::new(
+            "request-agent-recent",
+            DaemonCommand::AgentRecentBlips,
+            DaemonRequestPayload::AgentRecentBlips {
+                workspace: "auth-bug".to_owned(),
+                limit: 10,
+            },
+        );
+
+        let value = serde_json::to_value(&request).expect("agent recent request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-agent-recent",
+                "command": "agent_recent_blips",
+                "payload": {
+                    "agent_recent_blips": {
+                        "workspace": "auth-bug",
+                        "limit": 10,
+                    }
+                },
+            })
+        );
+
+        let decoded = serde_json::from_value::<DaemonRequest>(value)
+            .expect("agent recent request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn agent_blips_response_json_shape_round_trips() {
+        let response = DaemonResponse::ok(
+            "request-agent-recent",
+            DaemonCommand::AgentRecentBlips,
+            DaemonResponsePayload::AgentBlips(AgentBlipListResponse {
+                workspace: "auth-bug".to_owned(),
+                blips: vec![AgentBlip {
+                    id: "blip-1".to_owned(),
+                    content: "full workspace content".to_owned(),
+                    size_bytes: 22,
+                }],
+            }),
+        );
+
+        let value = serde_json::to_value(&response).expect("agent blips response should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-agent-recent",
+                "command": "agent_recent_blips",
+                "status": "ok",
+                "payload": {
+                    "agent_blips": {
+                        "workspace": "auth-bug",
+                        "blips": [{
+                            "id": "blip-1",
+                            "content": "full workspace content",
+                            "size_bytes": 22,
+                        }],
+                    }
+                },
+                "error": null,
+            })
+        );
+
+        let decoded = serde_json::from_value::<DaemonResponse>(value)
+            .expect("agent blips response should decode");
         assert_eq!(decoded, response);
     }
 

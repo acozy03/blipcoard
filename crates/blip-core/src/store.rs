@@ -391,6 +391,22 @@ impl BlipStore {
         Ok(summaries)
     }
 
+    pub fn list_agent_blips(
+        &self,
+        workspace_name: &str,
+        limit: usize,
+    ) -> Result<Vec<Blip>, BlipError> {
+        let workspace = self
+            .get_workspace(workspace_name)?
+            .ok_or_else(|| BlipError::WorkspaceNotFound(workspace_name.to_owned()))?;
+
+        if !workspace.agent_access {
+            return Err(BlipError::AgentAccessDenied(workspace_name.to_owned()));
+        }
+
+        self.list_blips_limited(workspace_name, limit)
+    }
+
     pub fn move_blip(&mut self, id: &str, target_workspace: &str) -> Result<BlipMove, BlipError> {
         self.with_busy_retry(|store| store.move_blip_once(id, target_workspace))
     }
@@ -931,6 +947,55 @@ mod tests {
             .expect_err("empty inbox should fail");
 
         assert!(matches!(error, BlipError::InboxEmpty));
+    }
+
+    #[test]
+    fn agent_reads_only_agent_access_workspaces() {
+        let mut store = store_with_workspace("auth-bug");
+        store
+            .create_workspace(&NewWorkspace {
+                name: "agent-feed".into(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("agent workspace should be created");
+        store
+            .insert_blip(&NewBlip {
+                workspace_name: "agent-feed".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "agent-visible note".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("agent blip should insert");
+
+        let visible = store
+            .list_agent_blips("agent-feed", 50)
+            .expect("agent-readable workspace should list");
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].content, "agent-visible note");
+
+        let denied = store
+            .list_agent_blips("auth-bug", 50)
+            .expect_err("human-only workspace should be denied");
+        assert!(matches!(
+            denied,
+            BlipError::AgentAccessDenied(workspace) if workspace == "auth-bug"
+        ));
+
+        let inbox_denied = store
+            .list_agent_blips("inbox", 50)
+            .expect_err("inbox should be denied by default");
+        assert!(matches!(
+            inbox_denied,
+            BlipError::AgentAccessDenied(workspace) if workspace == "inbox"
+        ));
     }
 
     #[test]

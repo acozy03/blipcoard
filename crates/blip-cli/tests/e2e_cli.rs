@@ -41,6 +41,12 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
         .stdout(predicate::str::contains("created workspace auth-bug"));
 
     blip_command(&db_path)
+        .args(["create", "agent-feed", "--agent-access"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("created workspace agent-feed"));
+
+    blip_command(&db_path)
         .args([
             "add-demo",
             "auth-bug",
@@ -48,6 +54,12 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
             "--source-app",
             "Firefox",
         ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("created blip"));
+
+    blip_command(&db_path)
+        .args(["add-demo", "agent-feed", "Agent-visible deployment note"])
         .assert()
         .success()
         .stdout(predicate::str::contains("created blip"));
@@ -89,7 +101,8 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
         .args(["workspaces"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("auth-bug [human-only]"));
+        .stdout(predicate::str::contains("auth-bug [human-only]"))
+        .stdout(predicate::str::contains("agent-feed [agent-readable]"));
 
     blip_command_with_socket(&db_path, &socket_path)
         .args(["inbox"])
@@ -102,6 +115,37 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
         .assert()
         .success()
         .stdout(predicate::str::contains("TypeError: broken login flow"));
+
+    let agent_recent = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["agent", "recent", "agent-feed", "--output", "json"],
+    );
+    assert_eq!(agent_recent["workspace"], "agent-feed");
+    assert!(
+        agent_recent["blips"]
+            .as_array()
+            .expect("agent blips should be an array")
+            .iter()
+            .any(|blip| blip["content"] == "Agent-visible deployment note")
+    );
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["agent", "recent", "auth-bug"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "daemon returned access_denied: agent access to workspace `auth-bug` is denied",
+        ));
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["agent", "recent", "inbox"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "daemon returned access_denied: agent access to workspace `inbox` is denied",
+        ));
 
     let health = assert_json_success(
         blip_command_with_socket(&db_path, &socket_path),
@@ -128,6 +172,11 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
         workspaces
             .iter()
             .any(|workspace| workspace["name"] == "auth-bug" && workspace["agent_access"] == false)
+    );
+    assert!(
+        workspaces
+            .iter()
+            .any(|workspace| workspace["name"] == "agent-feed" && workspace["agent_access"] == true)
     );
 
     let inbox = assert_json_success(

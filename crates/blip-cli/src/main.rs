@@ -70,11 +70,26 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         output: OutputFormat,
     },
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommands,
+    },
     AddDemo {
         workspace: String,
         content: String,
         #[arg(long)]
         source_app: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentCommands {
+    Recent {
+        workspace: String,
+        #[arg(long, default_value_t = DEFAULT_LIST_LIMIT)]
+        limit: usize,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
     },
 }
 
@@ -228,6 +243,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        Commands::Agent { command } => match command {
+            AgentCommands::Recent {
+                workspace,
+                limit,
+                output,
+            } => {
+                let blips =
+                    DaemonClient::from_config(&config)?.agent_recent_blips(&workspace, limit)?;
+                print_agent_blip_list_response(blips, output)?;
+            }
+        },
         Commands::AddDemo {
             workspace,
             content,
@@ -245,6 +271,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 tags: vec!["demo".to_string()],
             })?;
             println!("created blip {}", blip.id);
+        }
+    }
+
+    Ok(())
+}
+
+fn print_agent_blip_list_response(
+    response: blip_api::AgentBlipListResponse,
+    output: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match output {
+        OutputFormat::Human => {
+            for blip in response.blips {
+                println!(
+                    "{} :: {}",
+                    blip.id,
+                    format_preview(&blip.content, blip.size_bytes)
+                );
+            }
+        }
+        OutputFormat::Json => {
+            serde_json::to_writer(io::stdout().lock(), &response)?;
+            println!();
         }
     }
 

@@ -32,6 +32,9 @@ pub enum BlipError {
     #[error("inbox is empty")]
     InboxEmpty,
 
+    #[error("agent access to workspace `{0}` is denied")]
+    AgentAccessDenied(String),
+
     #[error("active workspace is not set")]
     ActiveWorkspaceNotSet,
 }
