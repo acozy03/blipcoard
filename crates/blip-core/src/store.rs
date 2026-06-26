@@ -17,16 +17,23 @@ const DEFAULT_BLIP_PREVIEW_CHARS: i64 = 72;
 const BUSY_RETRY_ATTEMPTS: usize = 5;
 const BUSY_RETRY_DELAY: Duration = Duration::from_millis(25);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
+const SCHEMA_VERSION: i32 = 2;
 
 struct Migration {
     version: i32,
     sql: &'static str,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: include_str!("sql/001_initial.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: include_str!("sql/001_initial.sql"),
+    },
+    Migration {
+        version: 2,
+        sql: include_str!("sql/002_audit_read_events.sql"),
+    },
+];
 
 pub struct BlipStore {
     conn: Connection,
@@ -87,9 +94,16 @@ impl BlipStore {
         }
 
         let schema_initialized = tx.execute(
-            "INSERT OR IGNORE INTO app_state(key, value) VALUES('schema_version', '1')",
-            [],
+            "INSERT OR IGNORE INTO app_state(key, value) VALUES('schema_version', ?1)",
+            [SCHEMA_VERSION.to_string()],
         )?;
+
+        if schema_initialized == 0 {
+            tx.execute(
+                "UPDATE app_state SET value = ?1 WHERE key = 'schema_version'",
+                [SCHEMA_VERSION.to_string()],
+            )?;
+        }
 
         if schema_initialized > 0 {
             Self::insert_audit_event(
@@ -99,7 +113,7 @@ impl BlipStore {
                 AuditEventType::SchemaInitialized,
                 None,
                 Some(INBOX_WORKSPACE.to_owned()),
-                Some("{\"version\":1}".to_owned()),
+                Some(format!("{{\"version\":{SCHEMA_VERSION}}}")),
             )?;
         }
 
@@ -339,7 +353,15 @@ impl BlipStore {
             return Err(BlipError::WorkspaceNotFound(workspace_name.to_owned()));
         }
 
-        let mut stmt = self.conn.prepare(
+        Self::list_blips_limited_from(&self.conn, workspace_name, limit)
+    }
+
+    fn list_blips_limited_from(
+        conn: &Connection,
+        workspace_name: &str,
+        limit: usize,
+    ) -> Result<Vec<Blip>, BlipError> {
+        let mut stmt = conn.prepare(
             "SELECT id, workspace_name, source_app, content_type, language, content, size_bytes,
                     token_estimate, is_redacted, tags_json, created_at
              FROM blips
@@ -392,17 +414,53 @@ impl BlipStore {
     }
 
     pub fn list_agent_blips(
-        &self,
+        &mut self,
         workspace_name: &str,
         limit: usize,
     ) -> Result<Vec<Blip>, BlipError> {
-        self.require_agent_read_access(workspace_name)?;
-        self.list_blips_limited(workspace_name, limit)
+        self.with_busy_retry(|store| store.list_agent_blips_once(workspace_name, limit))
+    }
+
+    fn list_agent_blips_once(
+        &mut self,
+        workspace_name: &str,
+        limit: usize,
+    ) -> Result<Vec<Blip>, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        let workspace = Self::require_agent_read_access_from(&tx, workspace_name)?;
+        let blips = Self::list_blips_limited_from(&tx, workspace_name, limit)?;
+        let details_json = serde_json::json!({
+            "limit": sqlite_limit(limit),
+            "result_count": blips.len(),
+        })
+        .to_string();
+
+        Self::insert_audit_event(
+            &tx,
+            ActorType::Agent,
+            None,
+            AuditEventType::BlipsRead,
+            None,
+            Some(workspace.name),
+            Some(details_json),
+        )?;
+
+        tx.commit()?;
+        Ok(blips)
     }
 
     pub fn require_agent_read_access(&self, workspace_name: &str) -> Result<Workspace, BlipError> {
-        let workspace = self
-            .get_workspace(workspace_name)?
+        Self::require_agent_read_access_from(&self.conn, workspace_name)
+    }
+
+    fn require_agent_read_access_from(
+        conn: &Connection,
+        workspace_name: &str,
+    ) -> Result<Workspace, BlipError> {
+        let workspace = Self::get_workspace_from(conn, workspace_name)?
             .ok_or_else(|| BlipError::WorkspaceNotFound(workspace_name.to_owned()))?;
         workspace.require_agent_read_access()?;
         Ok(workspace)
@@ -743,7 +801,17 @@ mod tests {
             .connection()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i32>(0))
             .expect("schema version should be readable");
-        assert_eq!(schema_version, 1);
+        assert_eq!(schema_version, SCHEMA_VERSION);
+
+        let app_state_schema_version = store
+            .connection()
+            .query_row(
+                "SELECT value FROM app_state WHERE key = 'schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("app_state schema version should be readable");
+        assert_eq!(app_state_schema_version, SCHEMA_VERSION.to_string());
     }
 
     #[test]
@@ -981,6 +1049,15 @@ mod tests {
             .expect("agent-readable workspace should list");
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].content, "agent-visible note");
+        let audit_events = store.list_audit_events().expect("audit list should work");
+        assert!(audit_events.iter().any(|event| {
+            event.actor_type == ActorType::Agent
+                && event.event_type == AuditEventType::BlipsRead
+                && event.target_workspace.as_deref() == Some("agent-feed")
+                && event.details_json.as_deref().is_some_and(|details| {
+                    details.contains("\"limit\":50") && details.contains("\"result_count\":1")
+                })
+        }));
 
         let denied = store
             .list_agent_blips("auth-bug", 50)
