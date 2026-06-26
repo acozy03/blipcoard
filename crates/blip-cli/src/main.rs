@@ -360,13 +360,20 @@ fn format_blip_summary(blip: &blip_api::BlipSummary) -> String {
     }
 }
 
-fn blip_summary_flags(blip: &blip_api::BlipSummary) -> Vec<&'static str> {
+fn blip_summary_flags(blip: &blip_api::BlipSummary) -> Vec<String> {
     let mut flags = Vec::new();
     if blip.is_redacted {
-        flags.push("[redacted]");
+        flags.push("[redacted]".to_string());
+    }
+    if let Some(type_tag) = blip
+        .tags
+        .iter()
+        .find(|tag| tag.starts_with(blip_core::TYPE_TAG_PREFIX))
+    {
+        flags.push(format!("[{type_tag}]"));
     }
     if blip.tags.iter().any(|tag| tag == blip_core::SECRET_TAG) {
-        flags.push("[secret]");
+        flags.push("[secret]".to_string());
     }
     flags
 }

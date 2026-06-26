@@ -997,7 +997,7 @@ mod tests {
                     preview: "copied text".to_owned(),
                     size_bytes: 11,
                     is_redacted: false,
-                    tags: Vec::new(),
+                    tags: vec!["type:plain_text".to_owned()],
                 }],
             })),
         );
@@ -1059,7 +1059,7 @@ mod tests {
                     preview: "login callback timeout".to_owned(),
                     size_bytes: 22,
                     is_redacted: false,
-                    tags: Vec::new(),
+                    tags: vec!["type:plain_text".to_owned()],
                 }],
             })),
         );
@@ -1139,7 +1139,7 @@ mod tests {
                 size_bytes: 21,
                 token_estimate: Some(3),
                 is_redacted: true,
-                tags: vec!["demo".to_owned()],
+                tags: vec!["demo".to_owned(), "type:plain_text".to_owned()],
                 created_at: inserted.created_at,
             })),
         );
