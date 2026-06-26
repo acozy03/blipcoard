@@ -20,6 +20,7 @@ import {
   listWorkspaceBlips,
   listWorkspaces,
   registerGlobalShortcuts,
+  routeLatestInboxBlip,
   setStickyCapture,
   type AuditEventSummary,
   type BlipDetail,
@@ -60,6 +61,12 @@ type ShortcutState =
   | { status: "ready"; shortcuts: ShortcutRegistration[] }
   | { status: "error"; message: string };
 
+type SendState =
+  | { status: "idle" }
+  | { status: "sending"; workspace: string }
+  | { status: "sent"; message: string }
+  | { status: "error"; message: string };
+
 function App() {
   const [workspaceState, setWorkspaceState] = React.useState<WorkspaceState>({
     status: "loading"
@@ -73,6 +80,7 @@ function App() {
   const [detailState, setDetailState] = React.useState<DetailState>({ status: "idle" });
   const [auditState, setAuditState] = React.useState<AuditState>({ status: "loading" });
   const [shortcutState, setShortcutState] = React.useState<ShortcutState>({ status: "loading" });
+  const [sendState, setSendState] = React.useState<SendState>({ status: "idle" });
 
   React.useEffect(() => {
     selectedWorkspaceRef.current = selectedWorkspace;
@@ -243,6 +251,27 @@ function App() {
       });
   };
 
+  const sendLatestToSelectedWorkspace = () => {
+    if (!selectedSummary || selectedSummary.name === "inbox") {
+      return;
+    }
+
+    setSendState({ status: "sending", workspace: selectedSummary.name });
+    routeLatestInboxBlip(selectedSummary.name)
+      .then((routed) => {
+        setSendState({
+          status: "sent",
+          message: `Sent ${routed.id} to ${routed.to_workspace}`
+        });
+        loadBlips(selectedSummary.name);
+        loadAudit();
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "Unable to send latest blip";
+        setSendState({ status: "error", message });
+      });
+  };
+
   const selectedSummary =
     workspaceState.status === "ready"
       ? workspaceState.workspaces.find((workspace) => workspace.name === selectedWorkspace)
@@ -293,7 +322,9 @@ function App() {
               }
               workspace={selectedSummary}
               onActivate={setActiveWorkspace}
+              onSendLatest={sendLatestToSelectedWorkspace}
               onToggleSticky={toggleStickyCapture}
+              sendState={sendState}
             />
           ) : null}
           <div className="workspace-main">
@@ -501,14 +532,19 @@ function WorkspaceHeader({
   activeWorkspace,
   workspace,
   onActivate,
-  onToggleSticky
+  onSendLatest,
+  onToggleSticky,
+  sendState
 }: {
   activeWorkspace: string | null;
   workspace: WorkspaceSummary;
   onActivate: () => void;
+  onSendLatest: () => void;
   onToggleSticky: () => void;
+  sendState: SendState;
 }) {
   const isActive = workspace.name === activeWorkspace;
+  const sendDisabled = workspace.name === "inbox" || sendState.status === "sending";
 
   return (
     <div className="workspace-header">
@@ -516,10 +552,18 @@ function WorkspaceHeader({
         <Inbox aria-hidden="true" size={20} />
         <div>
           <h2>{workspace.name}</h2>
-          <p>{workspace.agent_access ? "Agent-readable" : "Human-only"}</p>
+          <p>{workspaceStatusText(workspace, sendState)}</p>
         </div>
       </div>
       <div className="workspace-actions">
+        <button
+          className="text-button"
+          type="button"
+          onClick={onSendLatest}
+          disabled={sendDisabled}
+        >
+          {sendState.status === "sending" ? "Sending" : "Send latest"}
+        </button>
         <button className="text-button" type="button" onClick={onToggleSticky}>
           {workspace.sticky_capture ? "Sticky on" : "Sticky off"}
         </button>
@@ -529,6 +573,14 @@ function WorkspaceHeader({
       </div>
     </div>
   );
+}
+
+function workspaceStatusText(workspace: WorkspaceSummary, sendState: SendState) {
+  if (sendState.status === "sent" || sendState.status === "error") {
+    return sendState.message;
+  }
+
+  return workspace.agent_access ? "Agent-readable" : "Human-only";
 }
 
 function BlipPanel({

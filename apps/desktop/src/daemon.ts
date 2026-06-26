@@ -29,6 +29,12 @@ export type AuditEventSummary = {
   created_at: string;
 };
 
+export type BlipRoutedResponse = {
+  id: string;
+  from_workspace: string;
+  to_workspace: string;
+};
+
 export type ShortcutRegistration = {
   id: string;
   label: string;
@@ -328,6 +334,35 @@ export async function setStickyCapture(
   }
 
   return updated;
+}
+
+export async function routeLatestInboxBlip(workspace: string): Promise<BlipRoutedResponse> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    return invoke<BlipRoutedResponse>("route_latest_inbox_blip", { workspace });
+  }
+
+  await devDelay();
+  const [latest] = DEV_BLIPS.inbox;
+
+  if (!latest) {
+    throw new Error("inbox is empty");
+  }
+
+  DEV_BLIPS.inbox = DEV_BLIPS.inbox.filter((blip) => blip.id !== latest.id);
+  DEV_BLIPS[workspace] = [latest, ...(DEV_BLIPS[workspace] ?? [])];
+  const detail = DEV_DETAILS[latest.id];
+
+  if (detail) {
+    detail.workspace = workspace;
+  }
+
+  return {
+    id: latest.id,
+    from_workspace: "inbox",
+    to_workspace: workspace
+  };
 }
 
 function getInvoke() {
