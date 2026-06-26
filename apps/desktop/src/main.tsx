@@ -20,6 +20,7 @@ import {
   listWorkspaceBlips,
   listWorkspaces,
   registerGlobalShortcuts,
+  setStickyCapture,
   type AuditEventSummary,
   type BlipDetail,
   type BlipSummary,
@@ -215,6 +216,33 @@ function App() {
       });
   };
 
+  const toggleStickyCapture = () => {
+    if (!selectedSummary || workspaceState.status !== "ready") {
+      return;
+    }
+
+    setStickyCapture(selectedSummary.name, !selectedSummary.sticky_capture)
+      .then((updatedWorkspace) => {
+        setWorkspaceState({
+          ...workspaceState,
+          workspaces: workspaceState.workspaces.map((workspace) => ({
+            ...workspace,
+            sticky_capture:
+              updatedWorkspace.sticky_capture && workspace.name !== updatedWorkspace.name
+                ? false
+                : workspace.name === updatedWorkspace.name
+                  ? updatedWorkspace.sticky_capture
+                  : workspace.sticky_capture
+          }))
+        });
+        loadAudit();
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "Unable to update sticky mode";
+        setWorkspaceState({ status: "error", message });
+      });
+  };
+
   const selectedSummary =
     workspaceState.status === "ready"
       ? workspaceState.workspaces.find((workspace) => workspace.name === selectedWorkspace)
@@ -265,6 +293,7 @@ function App() {
               }
               workspace={selectedSummary}
               onActivate={setActiveWorkspace}
+              onToggleSticky={toggleStickyCapture}
             />
           ) : null}
           <div className="workspace-main">
@@ -460,6 +489,7 @@ function WorkspaceList({
                 Active
               </span>
             ) : null}
+            {workspace.sticky_capture ? <span className="sticky-marker">Sticky</span> : null}
           </button>
         );
       })}
@@ -470,11 +500,13 @@ function WorkspaceList({
 function WorkspaceHeader({
   activeWorkspace,
   workspace,
-  onActivate
+  onActivate,
+  onToggleSticky
 }: {
   activeWorkspace: string | null;
   workspace: WorkspaceSummary;
   onActivate: () => void;
+  onToggleSticky: () => void;
 }) {
   const isActive = workspace.name === activeWorkspace;
 
@@ -487,9 +519,14 @@ function WorkspaceHeader({
           <p>{workspace.agent_access ? "Agent-readable" : "Human-only"}</p>
         </div>
       </div>
-      <button className="text-button" type="button" onClick={onActivate} disabled={isActive}>
-        {isActive ? "Active" : "Set active"}
-      </button>
+      <div className="workspace-actions">
+        <button className="text-button" type="button" onClick={onToggleSticky}>
+          {workspace.sticky_capture ? "Sticky on" : "Sticky off"}
+        </button>
+        <button className="text-button" type="button" onClick={onActivate} disabled={isActive}>
+          {isActive ? "Active" : "Set active"}
+        </button>
+      </div>
     </div>
   );
 }

@@ -42,6 +42,7 @@ pub enum DaemonCommand {
     Version,
     CurrentWorkspace,
     ActivateWorkspace,
+    SetStickyCapture,
     ListWorkspaces,
     ListBlips,
     GetBlip,
@@ -58,6 +59,7 @@ impl DaemonCommand {
             Self::Version => "version",
             Self::CurrentWorkspace => "current_workspace",
             Self::ActivateWorkspace => "activate_workspace",
+            Self::SetStickyCapture => "set_sticky_capture",
             Self::ListWorkspaces => "list_workspaces",
             Self::ListBlips => "list_blips",
             Self::GetBlip => "get_blip",
@@ -76,6 +78,7 @@ pub enum DaemonRequestPayload {
     Version,
     CurrentWorkspace,
     ActivateWorkspace { workspace: String },
+    SetStickyCapture { workspace: String, enabled: bool },
     ListWorkspaces,
     ListBlips { workspace: String, limit: usize },
     GetBlip { blip_id: String },
@@ -141,6 +144,7 @@ pub enum DaemonResponsePayload {
     Version(DaemonVersionResponse),
     CurrentWorkspace(CurrentWorkspaceResponse),
     WorkspaceActivated(CurrentWorkspaceResponse),
+    StickyCaptureSet(WorkspaceSummary),
     Workspaces(WorkspaceListResponse),
     Blips(BlipListResponse),
     Blip(BlipDetail),
@@ -169,6 +173,7 @@ pub struct WorkspaceListResponse {
 pub struct WorkspaceSummary {
     pub name: String,
     pub agent_access: bool,
+    pub sticky_capture: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

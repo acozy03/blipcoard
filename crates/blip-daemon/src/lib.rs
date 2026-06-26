@@ -152,19 +152,36 @@ where
                     DaemonApiError::new(DaemonApiErrorCode::StoreUnavailable, error.to_string()),
                 ),
             },
+            (
+                DaemonCommand::SetStickyCapture,
+                DaemonRequestPayload::SetStickyCapture { workspace, enabled },
+            ) => match self.store.set_sticky_capture(&workspace, enabled) {
+                Ok(workspace) => DaemonResponse::ok(
+                    request_id,
+                    command,
+                    DaemonResponsePayload::StickyCaptureSet(workspace_summary(workspace)),
+                ),
+                Err(BlipError::WorkspaceNotFound(workspace)) => DaemonResponse::error(
+                    request_id,
+                    command,
+                    DaemonApiError::new(
+                        DaemonApiErrorCode::NotFound,
+                        format!("workspace `{workspace}` does not exist"),
+                    ),
+                ),
+                Err(error) => DaemonResponse::error(
+                    request_id,
+                    command,
+                    DaemonApiError::new(DaemonApiErrorCode::StoreUnavailable, error.to_string()),
+                ),
+            },
             (DaemonCommand::ListWorkspaces, DaemonRequestPayload::ListWorkspaces) => {
                 match self.store.list_workspaces() {
                     Ok(workspaces) => DaemonResponse::ok(
                         request_id,
                         command,
                         DaemonResponsePayload::Workspaces(WorkspaceListResponse {
-                            workspaces: workspaces
-                                .into_iter()
-                                .map(|workspace| WorkspaceSummary {
-                                    name: workspace.name,
-                                    agent_access: workspace.agent_access,
-                                })
-                                .collect(),
+                            workspaces: workspaces.into_iter().map(workspace_summary).collect(),
                         }),
                     ),
                     Err(error) => DaemonResponse::error(
@@ -334,7 +351,10 @@ where
         }
 
         self.store.insert_blip(&NewBlip {
-            workspace_name: INBOX_WORKSPACE.to_owned(),
+            workspace_name: self
+                .store
+                .get_sticky_workspace()?
+                .unwrap_or_else(|| INBOX_WORKSPACE.to_owned()),
             source_app: None,
             content_type: ContentType::PlainText,
             language: None,
@@ -376,6 +396,14 @@ fn audit_event_summary(event: AuditEvent) -> AuditEventSummary {
         target_workspace: event.target_workspace,
         details_json: event.details_json,
         created_at: event.created_at,
+    }
+}
+
+fn workspace_summary(workspace: blip_core::Workspace) -> WorkspaceSummary {
+    WorkspaceSummary {
+        name: workspace.name,
+        agent_access: workspace.agent_access,
+        sticky_capture: workspace.sticky_capture,
     }
 }
 
@@ -1307,6 +1335,48 @@ mod tests {
             event.event_type == blip_core::AuditEventType::BlipIngested
                 && event.target_blip_id.as_deref() == Some(blips[0].id.as_str())
                 && event.target_workspace.as_deref() == Some("inbox")
+        }));
+    }
+
+    #[test]
+    fn runtime_persists_clipboard_text_events_into_sticky_workspace() {
+        let mut store = store_with_workspace("auth-bug");
+        store
+            .set_sticky_capture("auth-bug", true)
+            .expect("sticky capture should enable");
+        let source = ScriptedIngestionSource {
+            events: vec![
+                RuntimeEvent::Shutdown,
+                RuntimeEvent::ClipboardTextChanged {
+                    text: "sticky copied text".to_owned(),
+                },
+            ],
+            calls: 0,
+        };
+        let mut runtime = DaemonRuntime::new("/tmp/blipcoard-test.db", store, source);
+
+        runtime.run().expect("runtime should ingest clipboard text");
+
+        let auth_blips = runtime
+            .store
+            .list_blips("auth-bug")
+            .expect("sticky workspace blips should list");
+        assert_eq!(auth_blips.len(), 1);
+        assert_eq!(auth_blips[0].content, "sticky copied text");
+
+        let inbox_blips = runtime
+            .store
+            .list_blips("inbox")
+            .expect("inbox blips should list");
+        assert!(inbox_blips.is_empty());
+
+        let audit_events = runtime
+            .store
+            .list_audit_events()
+            .expect("audit events should be listed");
+        assert!(audit_events.iter().any(|event| {
+            event.event_type == blip_core::AuditEventType::BlipIngested
+                && event.target_workspace.as_deref() == Some("auth-bug")
         }));
     }
 
