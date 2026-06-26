@@ -5,3 +5,4 @@
 *.db-shm
 *.db-wal
 node_modules/
+/apps/desktop/dist/
