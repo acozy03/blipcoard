@@ -396,15 +396,16 @@ impl BlipStore {
         workspace_name: &str,
         limit: usize,
     ) -> Result<Vec<Blip>, BlipError> {
+        self.require_agent_read_access(workspace_name)?;
+        self.list_blips_limited(workspace_name, limit)
+    }
+
+    pub fn require_agent_read_access(&self, workspace_name: &str) -> Result<Workspace, BlipError> {
         let workspace = self
             .get_workspace(workspace_name)?
             .ok_or_else(|| BlipError::WorkspaceNotFound(workspace_name.to_owned()))?;
-
-        if !workspace.agent_access {
-            return Err(BlipError::AgentAccessDenied(workspace_name.to_owned()));
-        }
-
-        self.list_blips_limited(workspace_name, limit)
+        workspace.require_agent_read_access()?;
+        Ok(workspace)
     }
 
     pub fn move_blip(&mut self, id: &str, target_workspace: &str) -> Result<BlipMove, BlipError> {
@@ -995,6 +996,50 @@ mod tests {
         assert!(matches!(
             inbox_denied,
             BlipError::AgentAccessDenied(workspace) if workspace == "inbox"
+        ));
+    }
+
+    #[test]
+    fn agent_read_policy_returns_explicit_decisions() {
+        let mut store = store_with_workspace("human-only");
+        store
+            .create_workspace(&NewWorkspace {
+                name: "agent-readable".into(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("agent-readable workspace should be created");
+
+        let allowed = store
+            .require_agent_read_access("agent-readable")
+            .expect("agent-readable workspace should be allowed");
+        assert_eq!(allowed.name, "agent-readable");
+
+        let denied = store
+            .require_agent_read_access("human-only")
+            .expect_err("human-only workspace should be denied");
+        assert!(matches!(
+            denied,
+            BlipError::AgentAccessDenied(workspace) if workspace == "human-only"
+        ));
+
+        let inbox_denied = store
+            .require_agent_read_access("inbox")
+            .expect_err("inbox should be denied by default");
+        assert!(matches!(
+            inbox_denied,
+            BlipError::AgentAccessDenied(workspace) if workspace == "inbox"
+        ));
+
+        let missing = store
+            .require_agent_read_access("missing")
+            .expect_err("missing workspace should be not found");
+        assert!(matches!(
+            missing,
+            BlipError::WorkspaceNotFound(workspace) if workspace == "missing"
         ));
     }
 
