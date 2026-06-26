@@ -357,6 +357,7 @@ fn payload_name(payload: Option<&DaemonResponsePayload>) -> &'static str {
         Some(DaemonResponsePayload::Version(_)) => "version",
         Some(DaemonResponsePayload::CurrentWorkspace(_)) => "current_workspace",
         Some(DaemonResponsePayload::WorkspaceActivated(_)) => "workspace_activated",
+        Some(DaemonResponsePayload::StickyCaptureSet(_)) => "sticky_capture_set",
         Some(DaemonResponsePayload::Workspaces(_)) => "workspaces",
         Some(DaemonResponsePayload::Blips(_)) => "blips",
         Some(DaemonResponsePayload::Blip(_)) => "blip",

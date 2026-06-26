@@ -17,7 +17,7 @@ const DEFAULT_BLIP_PREVIEW_CHARS: i64 = 72;
 const BUSY_RETRY_ATTEMPTS: usize = 5;
 const BUSY_RETRY_DELAY: Duration = Duration::from_millis(25);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 struct Migration {
     version: i32,
@@ -32,6 +32,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 2,
         sql: include_str!("sql/002_audit_read_events.sql"),
+    },
+    Migration {
+        version: 3,
+        sql: include_str!("sql/003_sticky_capture_audit_event.sql"),
     },
 ];
 
@@ -251,6 +255,66 @@ impl BlipStore {
 
     pub fn get_active_workspace(&self) -> Result<Option<String>, BlipError> {
         Self::get_active_workspace_from(&self.conn)
+    }
+
+    pub fn get_sticky_workspace(&self) -> Result<Option<String>, BlipError> {
+        self.conn
+            .query_row(
+                "SELECT name FROM workspaces WHERE sticky_capture = 1 ORDER BY created_at ASC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(BlipError::from)
+    }
+
+    pub fn set_sticky_capture(
+        &mut self,
+        name: &str,
+        enabled: bool,
+    ) -> Result<Workspace, BlipError> {
+        self.with_busy_retry(|store| store.set_sticky_capture_once(name, enabled))
+    }
+
+    fn set_sticky_capture_once(
+        &mut self,
+        name: &str,
+        enabled: bool,
+    ) -> Result<Workspace, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        if Self::get_workspace_from(&tx, name)?.is_none() {
+            return Err(BlipError::WorkspaceNotFound(name.to_owned()));
+        }
+
+        if enabled {
+            tx.execute(
+                "UPDATE workspaces SET sticky_capture = CASE WHEN name = ?1 THEN 1 ELSE 0 END",
+                [name],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE workspaces SET sticky_capture = 0 WHERE name = ?1",
+                [name],
+            )?;
+        }
+
+        Self::insert_audit_event(
+            &tx,
+            ActorType::User,
+            None,
+            AuditEventType::StickyCaptureChanged,
+            None,
+            Some(name.to_owned()),
+            Some(format!("{{\"enabled\":{enabled}}}")),
+        )?;
+
+        let workspace = Self::get_workspace_from(&tx, name)?
+            .ok_or_else(|| BlipError::WorkspaceNotFound(name.to_owned()))?;
+        tx.commit()?;
+        Ok(workspace)
     }
 
     fn get_active_workspace_from(conn: &Connection) -> Result<Option<String>, BlipError> {
@@ -863,6 +927,66 @@ mod tests {
         let blips = store.list_blips("auth-bug").expect("list should work");
         assert_eq!(blips.len(), 1);
         assert_eq!(blips[0].id, blip.id);
+    }
+
+    #[test]
+    fn sticky_capture_is_single_workspace_and_audited() {
+        let mut store = store_with_workspace("auth-bug");
+        store
+            .create_workspace(&NewWorkspace {
+                name: "notes".into(),
+                description: None,
+                color: None,
+                agent_access: false,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should be created");
+
+        let auth_bug = store
+            .set_sticky_capture("auth-bug", true)
+            .expect("sticky should enable");
+        assert!(auth_bug.sticky_capture);
+        assert_eq!(
+            store
+                .get_sticky_workspace()
+                .expect("sticky workspace should read")
+                .as_deref(),
+            Some("auth-bug")
+        );
+
+        let notes = store
+            .set_sticky_capture("notes", true)
+            .expect("sticky should move");
+        assert!(notes.sticky_capture);
+        assert!(
+            !store
+                .get_workspace("auth-bug")
+                .expect("workspace should read")
+                .expect("workspace should exist")
+                .sticky_capture
+        );
+
+        let notes = store
+            .set_sticky_capture("notes", false)
+            .expect("sticky should disable");
+        assert!(!notes.sticky_capture);
+        assert!(
+            store
+                .get_sticky_workspace()
+                .expect("sticky workspace should read")
+                .is_none()
+        );
+
+        let audit_events = store.list_audit_events().expect("audit list should work");
+        assert!(audit_events.iter().any(|event| {
+            event.event_type == AuditEventType::StickyCaptureChanged
+                && event.target_workspace.as_deref() == Some("notes")
+                && event
+                    .details_json
+                    .as_deref()
+                    .is_some_and(|details| details.contains("\"enabled\":false"))
+        }));
     }
 
     #[test]

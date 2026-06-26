@@ -144,7 +144,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             "human-only"
                         };
-                        println!("{} [{access}]", workspace.name);
+                        let sticky = if workspace.sticky_capture {
+                            ", sticky"
+                        } else {
+                            ""
+                        };
+                        println!("{} [{access}{sticky}]", workspace.name);
                     }
                 }
                 OutputFormat::Json => {

@@ -41,6 +41,7 @@ export type ShortcutRegistration = {
 export type WorkspaceSummary = {
   name: string;
   agent_access: boolean;
+  sticky_capture: boolean;
 };
 
 export type CurrentWorkspaceResponse = {
@@ -77,9 +78,9 @@ declare global {
 }
 
 const DEV_WORKSPACES: WorkspaceSummary[] = [
-  { name: "inbox", agent_access: false },
-  { name: "auth-bug", agent_access: false },
-  { name: "agent-feed", agent_access: true }
+  { name: "inbox", agent_access: false, sticky_capture: false },
+  { name: "auth-bug", agent_access: false, sticky_capture: false },
+  { name: "agent-feed", agent_access: true, sticky_capture: false }
 ];
 
 const DEV_BLIPS: Record<string, BlipSummary[]> = {
@@ -303,6 +304,30 @@ export async function activateWorkspace(workspace: string): Promise<CurrentWorks
   await devDelay();
   devActiveWorkspace = workspace;
   return { active_workspace: workspace };
+}
+
+export async function setStickyCapture(
+  workspace: string,
+  enabled: boolean
+): Promise<WorkspaceSummary> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    return invoke<WorkspaceSummary>("set_sticky_capture", { workspace, enabled });
+  }
+
+  await devDelay();
+  for (const devWorkspace of DEV_WORKSPACES) {
+    devWorkspace.sticky_capture = enabled && devWorkspace.name === workspace;
+  }
+
+  const updated = DEV_WORKSPACES.find((devWorkspace) => devWorkspace.name === workspace);
+
+  if (!updated) {
+    throw new Error(`workspace \`${workspace}\` does not exist`);
+  }
+
+  return updated;
 }
 
 function getInvoke() {

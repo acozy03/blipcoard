@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
       'schema_initialized',
       'workspace_created',
       'workspace_activated',
+      'sticky_capture_changed',
       'blip_ingested',
       'blip_moved',
       'blips_read'
