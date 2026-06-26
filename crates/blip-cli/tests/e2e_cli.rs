@@ -176,6 +176,27 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
     );
 
     blip_command_with_socket(&db_path, &socket_path)
+        .args(["agent", "bundle", "agent-feed"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("# blipcoard bundle"))
+        .stdout(predicate::str::contains("workspace: agent-feed"))
+        .stdout(predicate::str::contains("Rollback deployment note"));
+
+    let agent_bundle = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["agent", "bundle", "agent-feed", "--output", "json"],
+    );
+    assert_eq!(agent_bundle["workspace"], "agent-feed");
+    assert_eq!(agent_bundle["format"], "markdown");
+    assert!(
+        agent_bundle["content"]
+            .as_str()
+            .expect("bundle content should be a string")
+            .contains("# blipcoard bundle")
+    );
+
+    blip_command_with_socket(&db_path, &socket_path)
         .args(["agent", "recent", "auth-bug"])
         .assert()
         .failure()
@@ -186,6 +207,15 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
 
     blip_command_with_socket(&db_path, &socket_path)
         .args(["agent", "search", "auth-bug", "login"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "daemon returned access_denied: agent access to workspace `auth-bug` is denied",
+        ));
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["agent", "bundle", "auth-bug"])
         .assert()
         .failure()
         .stdout(predicate::str::is_empty())

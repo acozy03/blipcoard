@@ -7,11 +7,11 @@
 pub mod ipc;
 
 use blip_api::{
-    AgentBlip, AgentBlipListResponse, AuditEventListResponse, AuditEventSummary, BlipDetail,
-    BlipListResponse, BlipRoutedResponse, BlipSummary, CurrentWorkspaceResponse,
-    DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode, DaemonCommand, DaemonRequest,
-    DaemonRequestPayload, DaemonResponse, DaemonResponsePayload, DaemonVersionResponse,
-    HealthResponse, WorkspaceListResponse, WorkspaceSummary,
+    AgentBlip, AgentBlipListResponse, AgentBundleResponse, AuditEventListResponse,
+    AuditEventSummary, BlipDetail, BlipListResponse, BlipRoutedResponse, BlipSummary,
+    CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode,
+    DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
+    DaemonVersionResponse, HealthResponse, WorkspaceListResponse, WorkspaceSummary,
 };
 use blip_clipboard::{ClipboardError, ClipboardWatcher};
 use blip_core::{AuditEvent, Blip};
@@ -323,6 +323,25 @@ where
                 Err(error) => agent_read_error_response(request_id, command, error),
             },
             (
+                DaemonCommand::AgentBundle,
+                DaemonRequestPayload::AgentBundle { workspace, limit },
+            ) => match self.store.list_agent_blips(&workspace, limit) {
+                Ok(blips) => {
+                    let blip_count = blips.len();
+                    DaemonResponse::ok(
+                        request_id,
+                        command,
+                        DaemonResponsePayload::AgentBundle(AgentBundleResponse {
+                            content: render_agent_bundle(&workspace, &blips),
+                            workspace,
+                            format: "markdown".to_owned(),
+                            blip_count,
+                        }),
+                    )
+                }
+                Err(error) => agent_read_error_response(request_id, command, error),
+            },
+            (
                 DaemonCommand::RouteLatestInboxBlip,
                 DaemonRequestPayload::RouteLatestInboxBlip { workspace },
             ) => match self.store.move_latest_inbox_blip(&workspace) {
@@ -430,6 +449,40 @@ fn blip_summary(blip: blip_core::BlipSummary) -> BlipSummary {
         is_redacted: blip.is_redacted,
         tags: blip.tags,
     }
+}
+
+fn render_agent_bundle(workspace: &str, blips: &[Blip]) -> String {
+    let mut bundle = String::new();
+    bundle.push_str("# blipcoard bundle\n\n");
+    bundle.push_str(&format!("workspace: {workspace}\n"));
+    bundle.push_str(&format!("blip_count: {}\n\n", blips.len()));
+
+    for blip in blips {
+        bundle.push_str(&format!("## blip {}\n\n", blip.id));
+        bundle.push_str(&format!("content_type: {}\n", blip.content_type.as_str()));
+        bundle.push_str(&format!("size_bytes: {}\n", blip.size_bytes));
+        bundle.push_str(&format!("redacted: {}\n", blip.is_redacted));
+        bundle.push_str("tags:");
+        if blip.tags.is_empty() {
+            bundle.push_str(" []\n\n");
+        } else {
+            bundle.push(' ');
+            bundle.push_str(&blip.tags.join(","));
+            bundle.push_str("\n\n");
+        }
+
+        if blip.is_redacted {
+            bundle.push_str("[redacted]\n\n");
+        } else {
+            bundle.push_str(&blip.content);
+            if !blip.content.ends_with('\n') {
+                bundle.push('\n');
+            }
+            bundle.push('\n');
+        }
+    }
+
+    bundle
 }
 
 fn audit_event_summary(event: AuditEvent) -> AuditEventSummary {
@@ -1400,6 +1453,75 @@ mod tests {
                 to_workspace: "inbox".to_owned(),
             })),
         );
+    }
+
+    #[test]
+    fn dispatch_returns_agent_bundle_for_agent_access_workspace() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&blip_core::NewWorkspace {
+                name: "agent-feed".to_owned(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should be created");
+        let inserted = insert_test_blip(&mut store, "agent-feed", "agent-visible note");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "agent-bundle-1",
+            DaemonCommand::AgentBundle,
+            DaemonRequestPayload::AgentBundle {
+                workspace: "agent-feed".to_owned(),
+                limit: 50,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        match response.payload {
+            Some(DaemonResponsePayload::AgentBundle(bundle)) => {
+                assert_eq!(bundle.workspace, "agent-feed");
+                assert_eq!(bundle.format, "markdown");
+                assert_eq!(bundle.blip_count, 1);
+                assert!(bundle.content.contains("# blipcoard bundle"));
+                assert!(bundle.content.contains(&format!("## blip {}", inserted.id)));
+                assert!(bundle.content.contains("agent-visible note"));
+            }
+            other => panic!("expected bundle response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rendered_agent_bundle_omits_redacted_content() {
+        let bundle = render_agent_bundle(
+            "agent-feed",
+            &[Blip {
+                id: "redacted-blip".to_owned(),
+                workspace_name: "agent-feed".to_owned(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "do not include".to_owned(),
+                size_bytes: 14,
+                token_estimate: None,
+                is_redacted: true,
+                tags: vec!["secret".to_owned()],
+                created_at: Utc::now(),
+            }],
+        );
+
+        assert!(bundle.contains("[redacted]"));
+        assert!(!bundle.contains("do not include"));
     }
 
     #[test]
