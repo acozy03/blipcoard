@@ -1,8 +1,9 @@
 use blip_api::{
-    AgentBlipListResponse, AuditEventListResponse, BlipDetail, BlipListResponse,
-    BlipRoutedResponse, CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError,
-    DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
-    DaemonResponseStatus, DaemonVersionResponse, HealthResponse, WorkspaceListResponse,
+    AgentBlipListResponse, AgentBundleResponse, AuditEventListResponse, BlipDetail,
+    BlipListResponse, BlipRoutedResponse, CurrentWorkspaceResponse, DAEMON_API_VERSION,
+    DaemonApiError, DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse,
+    DaemonResponsePayload, DaemonResponseStatus, DaemonVersionResponse, HealthResponse,
+    WorkspaceListResponse,
 };
 use blip_config::{BlipConfig, ConfigError};
 use std::error::Error;
@@ -240,6 +241,29 @@ impl DaemonClient {
         }
     }
 
+    pub fn agent_bundle(
+        &self,
+        workspace: &str,
+        limit: usize,
+    ) -> Result<AgentBundleResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("agent-bundle"),
+            DaemonCommand::AgentBundle,
+            DaemonRequestPayload::AgentBundle {
+                workspace: workspace.to_owned(),
+                limit,
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::AgentBundle(bundle)) => Ok(bundle),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::AgentBundle,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
     pub fn route_latest_inbox_blip(
         &self,
         workspace: &str,
@@ -413,6 +437,7 @@ fn payload_name(payload: Option<&DaemonResponsePayload>) -> &'static str {
         Some(DaemonResponsePayload::Blip(_)) => "blip",
         Some(DaemonResponsePayload::AuditEvents(_)) => "audit_events",
         Some(DaemonResponsePayload::AgentBlips(_)) => "agent_blips",
+        Some(DaemonResponsePayload::AgentBundle(_)) => "agent_bundle",
         Some(DaemonResponsePayload::BlipRouted(_)) => "blip_routed",
         None => "none",
     }

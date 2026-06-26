@@ -52,6 +52,7 @@ pub enum DaemonCommand {
     RouteLatestInboxBlip,
     AgentRecentBlips,
     AgentSearchBlips,
+    AgentBundle,
 }
 
 impl DaemonCommand {
@@ -71,6 +72,7 @@ impl DaemonCommand {
             Self::RouteLatestInboxBlip => "route_latest_inbox_blip",
             Self::AgentRecentBlips => "agent_recent_blips",
             Self::AgentSearchBlips => "agent_search_blips",
+            Self::AgentBundle => "agent_bundle",
         }
     }
 }
@@ -118,6 +120,10 @@ pub enum DaemonRequestPayload {
     AgentSearchBlips {
         workspace: String,
         query: String,
+        limit: usize,
+    },
+    AgentBundle {
+        workspace: String,
         limit: usize,
     },
 }
@@ -184,6 +190,7 @@ pub enum DaemonResponsePayload {
     Blip(BlipDetail),
     AuditEvents(AuditEventListResponse),
     AgentBlips(AgentBlipListResponse),
+    AgentBundle(AgentBundleResponse),
     BlipRouted(BlipRoutedResponse),
 }
 
@@ -270,6 +277,14 @@ pub struct AgentBlip {
     pub id: String,
     pub content: String,
     pub size_bytes: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentBundleResponse {
+    pub workspace: String,
+    pub format: String,
+    pub blip_count: usize,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -849,6 +864,78 @@ mod tests {
         let decoded = serde_json::from_value::<DaemonRequest>(value)
             .expect("agent search request should decode");
         assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn agent_bundle_request_json_shape_round_trips() {
+        let request = DaemonRequest::new(
+            "request-agent-bundle",
+            DaemonCommand::AgentBundle,
+            DaemonRequestPayload::AgentBundle {
+                workspace: "agent-feed".to_owned(),
+                limit: 10,
+            },
+        );
+
+        let value = serde_json::to_value(&request).expect("agent bundle request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-agent-bundle",
+                "command": "agent_bundle",
+                "payload": {
+                    "agent_bundle": {
+                        "workspace": "agent-feed",
+                        "limit": 10,
+                    }
+                },
+            })
+        );
+
+        let decoded = serde_json::from_value::<DaemonRequest>(value)
+            .expect("agent bundle request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn agent_bundle_response_json_shape_round_trips() {
+        let response = DaemonResponse::ok(
+            "request-agent-bundle",
+            DaemonCommand::AgentBundle,
+            DaemonResponsePayload::AgentBundle(AgentBundleResponse {
+                workspace: "agent-feed".to_owned(),
+                format: "markdown".to_owned(),
+                blip_count: 1,
+                content: "# blipcoard bundle\n".to_owned(),
+            }),
+        );
+
+        let value = serde_json::to_value(&response).expect("bundle response should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-agent-bundle",
+                "command": "agent_bundle",
+                "status": "ok",
+                "payload": {
+                    "agent_bundle": {
+                        "workspace": "agent-feed",
+                        "format": "markdown",
+                        "blip_count": 1,
+                        "content": "# blipcoard bundle\n",
+                    }
+                },
+                "error": null,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<DaemonResponse>(value).expect("bundle response should decode");
+        assert_eq!(decoded, response);
     }
 
     #[test]

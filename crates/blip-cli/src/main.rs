@@ -107,6 +107,13 @@ enum AgentCommands {
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         output: OutputFormat,
     },
+    Bundle {
+        workspace: String,
+        #[arg(long, default_value_t = DEFAULT_LIST_LIMIT)]
+        limit: usize,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
 }
 
 fn main() {
@@ -276,6 +283,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .agent_search_blips(&workspace, &query, limit)?;
                 print_agent_blip_list_response(blips, output)?;
             }
+            AgentCommands::Bundle {
+                workspace,
+                limit,
+                output,
+            } => {
+                let bundle = DaemonClient::from_config(&config)?.agent_bundle(&workspace, limit)?;
+                print_agent_bundle_response(bundle, output)?;
+            }
         },
         Commands::AddDemo {
             workspace,
@@ -313,6 +328,23 @@ fn print_agent_blip_list_response(
                     format_preview(&blip.content, blip.size_bytes)
                 );
             }
+        }
+        OutputFormat::Json => {
+            serde_json::to_writer(io::stdout().lock(), &response)?;
+            println!();
+        }
+    }
+
+    Ok(())
+}
+
+fn print_agent_bundle_response(
+    response: blip_api::AgentBundleResponse,
+    output: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match output {
+        OutputFormat::Human => {
+            print!("{}", response.content);
         }
         OutputFormat::Json => {
             serde_json::to_writer(io::stdout().lock(), &response)?;
