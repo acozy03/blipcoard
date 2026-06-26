@@ -133,6 +133,31 @@ impl DaemonClient {
         }
     }
 
+    pub fn search_blips(
+        &self,
+        workspace: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<BlipListResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("search-blips"),
+            DaemonCommand::SearchBlips,
+            DaemonRequestPayload::SearchBlips {
+                workspace: workspace.to_owned(),
+                query: query.to_owned(),
+                limit,
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::Blips(blips)) => Ok(blips),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::SearchBlips,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
     pub fn blip(&self, blip_id: &str) -> Result<BlipDetail, DaemonClientError> {
         let response = self.request(DaemonRequest::new(
             next_request_id("blip"),
@@ -185,6 +210,31 @@ impl DaemonClient {
             Some(DaemonResponsePayload::AgentBlips(blips)) => Ok(blips),
             other => Err(DaemonClientError::UnexpectedPayload {
                 command: DaemonCommand::AgentRecentBlips,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn agent_search_blips(
+        &self,
+        workspace: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<AgentBlipListResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("agent-search-blips"),
+            DaemonCommand::AgentSearchBlips,
+            DaemonRequestPayload::AgentSearchBlips {
+                workspace: workspace.to_owned(),
+                query: query.to_owned(),
+                limit,
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::AgentBlips(blips)) => Ok(blips),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::AgentSearchBlips,
                 payload: payload_name(other.as_ref()),
             }),
         }

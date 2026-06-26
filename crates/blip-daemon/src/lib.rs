@@ -201,16 +201,7 @@ where
                         command,
                         DaemonResponsePayload::Blips(BlipListResponse {
                             workspace,
-                            blips: blips
-                                .into_iter()
-                                .map(|blip| BlipSummary {
-                                    id: blip.id,
-                                    preview: blip.preview,
-                                    size_bytes: blip.size_bytes,
-                                    is_redacted: blip.is_redacted,
-                                    tags: blip.tags,
-                                })
-                                .collect(),
+                            blips: blips.into_iter().map(blip_summary).collect(),
                         }),
                     ),
                     Err(error) => DaemonResponse::error(
@@ -223,6 +214,24 @@ where
                     ),
                 }
             }
+            (
+                DaemonCommand::SearchBlips,
+                DaemonRequestPayload::SearchBlips {
+                    workspace,
+                    query,
+                    limit,
+                },
+            ) => match self.store.search_blip_summaries(&workspace, &query, limit) {
+                Ok(blips) => DaemonResponse::ok(
+                    request_id,
+                    command,
+                    DaemonResponsePayload::Blips(BlipListResponse {
+                        workspace,
+                        blips: blips.into_iter().map(blip_summary).collect(),
+                    }),
+                ),
+                Err(error) => search_error_response(request_id, command, error),
+            },
             (DaemonCommand::GetBlip, DaemonRequestPayload::GetBlip { blip_id }) => {
                 match self.store.get_blip(&blip_id) {
                     Ok(Some(blip)) => DaemonResponse::ok(
@@ -271,6 +280,31 @@ where
                 DaemonCommand::AgentRecentBlips,
                 DaemonRequestPayload::AgentRecentBlips { workspace, limit },
             ) => match self.store.list_agent_blips(&workspace, limit) {
+                Ok(blips) => DaemonResponse::ok(
+                    request_id,
+                    command,
+                    DaemonResponsePayload::AgentBlips(AgentBlipListResponse {
+                        workspace,
+                        blips: blips
+                            .into_iter()
+                            .map(|blip| AgentBlip {
+                                id: blip.id,
+                                content: blip.content,
+                                size_bytes: blip.size_bytes,
+                            })
+                            .collect(),
+                    }),
+                ),
+                Err(error) => agent_read_error_response(request_id, command, error),
+            },
+            (
+                DaemonCommand::AgentSearchBlips,
+                DaemonRequestPayload::AgentSearchBlips {
+                    workspace,
+                    query,
+                    limit,
+                },
+            ) => match self.store.search_agent_blips(&workspace, &query, limit) {
                 Ok(blips) => DaemonResponse::ok(
                     request_id,
                     command,
@@ -388,6 +422,16 @@ fn blip_detail_from_store(blip: Blip) -> BlipDetail {
     }
 }
 
+fn blip_summary(blip: blip_core::BlipSummary) -> BlipSummary {
+    BlipSummary {
+        id: blip.id,
+        preview: blip.preview,
+        size_bytes: blip.size_bytes,
+        is_redacted: blip.is_redacted,
+        tags: blip.tags,
+    }
+}
+
 fn audit_event_summary(event: AuditEvent) -> AuditEventSummary {
     AuditEventSummary {
         id: event.id,
@@ -464,6 +508,60 @@ fn agent_read_error_response(
             DaemonApiError::new(
                 DaemonApiErrorCode::AccessDenied,
                 format!("agent access to workspace `{workspace}` is denied"),
+            ),
+        ),
+        BlipError::InvalidInput { field, reason } => DaemonResponse::error(
+            request_id,
+            command,
+            DaemonApiError::new(
+                DaemonApiErrorCode::InvalidRequest,
+                format!("{field} {reason}"),
+            ),
+        ),
+        BlipError::InvalidSearchQuery(message) => DaemonResponse::error(
+            request_id,
+            command,
+            DaemonApiError::new(
+                DaemonApiErrorCode::InvalidRequest,
+                format!("invalid search query: {message}"),
+            ),
+        ),
+        error => DaemonResponse::error(
+            request_id,
+            command,
+            DaemonApiError::new(DaemonApiErrorCode::StoreUnavailable, error.to_string()),
+        ),
+    }
+}
+
+fn search_error_response(
+    request_id: String,
+    command: DaemonCommand,
+    error: BlipError,
+) -> DaemonResponse {
+    match error {
+        BlipError::WorkspaceNotFound(workspace) => DaemonResponse::error(
+            request_id,
+            command,
+            DaemonApiError::new(
+                DaemonApiErrorCode::NotFound,
+                format!("workspace `{workspace}` does not exist"),
+            ),
+        ),
+        BlipError::InvalidInput { field, reason } => DaemonResponse::error(
+            request_id,
+            command,
+            DaemonApiError::new(
+                DaemonApiErrorCode::InvalidRequest,
+                format!("{field} {reason}"),
+            ),
+        ),
+        BlipError::InvalidSearchQuery(message) => DaemonResponse::error(
+            request_id,
+            command,
+            DaemonApiError::new(
+                DaemonApiErrorCode::InvalidRequest,
+                format!("invalid search query: {message}"),
             ),
         ),
         error => DaemonResponse::error(
@@ -906,6 +1004,97 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_returns_search_blips_payload() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let inserted = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".to_owned(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "login callback timeout".to_owned(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("blip should be inserted");
+        store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".to_owned(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "billing webhook timeout".to_owned(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("nonmatching blip should be inserted");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "search-1",
+            DaemonCommand::SearchBlips,
+            DaemonRequestPayload::SearchBlips {
+                workspace: "inbox".to_owned(),
+                query: "login".to_owned(),
+                limit: 50,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        assert_eq!(
+            response.payload,
+            Some(DaemonResponsePayload::Blips(BlipListResponse {
+                workspace: "inbox".to_owned(),
+                blips: vec![BlipSummary {
+                    id: inserted.id,
+                    preview: "login callback timeout".to_owned(),
+                    size_bytes: 22,
+                    is_redacted: false,
+                    tags: Vec::new(),
+                }],
+            })),
+        );
+    }
+
+    #[test]
+    fn dispatch_rejects_invalid_search_query() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "search-empty",
+            DaemonCommand::SearchBlips,
+            DaemonRequestPayload::SearchBlips {
+                workspace: "inbox".to_owned(),
+                query: " ".to_owned(),
+                limit: 50,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Error);
+        assert_eq!(
+            response.error.map(|error| error.code),
+            Some(DaemonApiErrorCode::InvalidRequest)
+        );
+    }
+
+    #[test]
     fn dispatch_returns_full_blip_detail_payload() {
         let mut store = BlipStore::in_memory().expect("store should initialize");
         let inserted = store
@@ -1060,6 +1249,64 @@ mod tests {
                 && event.event_type == blip_core::AuditEventType::BlipsRead
                 && event.target_workspace.as_deref() == Some("agent-feed")
         }));
+    }
+
+    #[test]
+    fn dispatch_returns_agent_search_blips_for_agent_access_workspace() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&blip_core::NewWorkspace {
+                name: "agent-feed".to_owned(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should be created");
+        let inserted = store
+            .insert_blip(&NewBlip {
+                workspace_name: "agent-feed".to_owned(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "deploy rollback note".to_owned(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("blip should be inserted");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "agent-search-1",
+            DaemonCommand::AgentSearchBlips,
+            DaemonRequestPayload::AgentSearchBlips {
+                workspace: "agent-feed".to_owned(),
+                query: "rollback".to_owned(),
+                limit: 50,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        assert_eq!(
+            response.payload,
+            Some(DaemonResponsePayload::AgentBlips(AgentBlipListResponse {
+                workspace: "agent-feed".to_owned(),
+                blips: vec![AgentBlip {
+                    id: inserted.id,
+                    content: "deploy rollback note".to_owned(),
+                    size_bytes: 20,
+                }],
+            })),
+        );
     }
 
     #[test]

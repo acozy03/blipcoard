@@ -18,7 +18,7 @@ const DEFAULT_BLIP_PREVIEW_CHARS: i64 = 72;
 const BUSY_RETRY_ATTEMPTS: usize = 5;
 const BUSY_RETRY_DELAY: Duration = Duration::from_millis(25);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 struct Migration {
     version: i32,
@@ -37,6 +37,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 3,
         sql: include_str!("sql/003_sticky_capture_audit_event.sql"),
+    },
+    Migration {
+        version: 4,
+        sql: include_str!("sql/004_blips_fts.sql"),
     },
 ];
 
@@ -479,12 +483,71 @@ impl BlipStore {
         Ok(summaries)
     }
 
+    pub fn search_blip_summaries(
+        &self,
+        workspace_name: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<BlipSummary>, BlipError> {
+        validate_search_query(query)?;
+
+        if self.get_workspace(workspace_name)?.is_none() {
+            return Err(BlipError::WorkspaceNotFound(workspace_name.to_owned()));
+        }
+
+        Self::search_blip_summaries_from(&self.conn, workspace_name, query, limit)
+    }
+
+    fn search_blip_summaries_from(
+        conn: &Connection,
+        workspace_name: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<BlipSummary>, BlipError> {
+        let mut stmt = conn.prepare(
+            "SELECT blips.id, blips.workspace_name, blips.source_app, blips.content_type,
+                    blips.language, substr(blips.content, 1, ?3), blips.size_bytes,
+                    blips.token_estimate, blips.is_redacted, blips.tags_json, blips.created_at
+             FROM blips_fts
+             JOIN blips ON blips_fts.rowid = blips.rowid
+             WHERE blips_fts MATCH ?2 AND blips.workspace_name = ?1
+             ORDER BY bm25(blips_fts) ASC, blips.created_at DESC, blips.rowid DESC
+             LIMIT ?4",
+        )?;
+
+        let mut rows = stmt
+            .query(params![
+                workspace_name,
+                query,
+                DEFAULT_BLIP_PREVIEW_CHARS,
+                sqlite_limit(limit)
+            ])
+            .map_err(map_search_error)?;
+        let mut summaries = Vec::new();
+
+        while let Some(row) = rows.next().map_err(map_search_error)? {
+            summaries.push(map_blip_summary_row(row)?);
+        }
+
+        Ok(summaries)
+    }
+
     pub fn list_agent_blips(
         &mut self,
         workspace_name: &str,
         limit: usize,
     ) -> Result<Vec<Blip>, BlipError> {
         self.with_busy_retry(|store| store.list_agent_blips_once(workspace_name, limit))
+    }
+
+    pub fn search_agent_blips(
+        &mut self,
+        workspace_name: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<Blip>, BlipError> {
+        validate_search_query(query)?;
+        self.with_busy_retry(|store| store.search_agent_blips_once(workspace_name, query, limit))
     }
 
     fn list_agent_blips_once(
@@ -515,6 +578,68 @@ impl BlipStore {
         )?;
 
         tx.commit()?;
+        Ok(blips)
+    }
+
+    fn search_agent_blips_once(
+        &mut self,
+        workspace_name: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<Blip>, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        let workspace = Self::require_agent_read_access_from(&tx, workspace_name)?;
+        let blips = Self::search_blips_limited_from(&tx, workspace_name, query, limit)?;
+        let details_json = serde_json::json!({
+            "query": query,
+            "limit": sqlite_limit(limit),
+            "result_count": blips.len(),
+        })
+        .to_string();
+
+        Self::insert_audit_event(
+            &tx,
+            ActorType::Agent,
+            None,
+            AuditEventType::BlipsRead,
+            None,
+            Some(workspace.name),
+            Some(details_json),
+        )?;
+
+        tx.commit()?;
+        Ok(blips)
+    }
+
+    fn search_blips_limited_from(
+        conn: &Connection,
+        workspace_name: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<Blip>, BlipError> {
+        let mut stmt = conn.prepare(
+            "SELECT blips.id, blips.workspace_name, blips.source_app, blips.content_type,
+                    blips.language, blips.content, blips.size_bytes, blips.token_estimate,
+                    blips.is_redacted, blips.tags_json, blips.created_at
+             FROM blips_fts
+             JOIN blips ON blips_fts.rowid = blips.rowid
+             WHERE blips_fts MATCH ?2 AND blips.workspace_name = ?1
+             ORDER BY bm25(blips_fts) ASC, blips.created_at DESC, blips.rowid DESC
+             LIMIT ?3",
+        )?;
+
+        let mut rows = stmt
+            .query(params![workspace_name, query, sqlite_limit(limit)])
+            .map_err(map_search_error)?;
+        let mut blips = Vec::new();
+
+        while let Some(row) = rows.next().map_err(map_search_error)? {
+            blips.push(map_blip_row(row)?);
+        }
+
         Ok(blips)
     }
 
@@ -797,6 +922,26 @@ fn validate_blip(blip: &NewBlip) -> Result<(), BlipError> {
     Ok(())
 }
 
+fn validate_search_query(query: &str) -> Result<(), BlipError> {
+    if query.trim().is_empty() {
+        return Err(BlipError::InvalidInput {
+            field: "search.query",
+            reason: "must not be empty",
+        });
+    }
+
+    Ok(())
+}
+
+fn map_search_error(error: rusqlite::Error) -> BlipError {
+    match &error {
+        rusqlite::Error::SqliteFailure(_, Some(message)) => {
+            BlipError::InvalidSearchQuery(message.clone())
+        }
+        _ => BlipError::from(error),
+    }
+}
+
 fn map_blip_row(row: &rusqlite::Row<'_>) -> Result<Blip, BlipError> {
     let tags_json: String = row.get(9)?;
     let tags = serde_json::from_str(&tags_json)?;
@@ -878,6 +1023,53 @@ mod tests {
             )
             .expect("app_state schema version should be readable");
         assert_eq!(app_state_schema_version, SCHEMA_VERSION.to_string());
+    }
+
+    #[test]
+    fn migration_backfills_existing_blips_into_fts_index() {
+        let db_path =
+            std::env::temp_dir().join(format!("blipcoard-fts-migration-{}.db", Uuid::new_v4()));
+        {
+            let conn = Connection::open(&db_path).expect("database should open");
+            conn.execute_batch(include_str!("sql/001_initial.sql"))
+                .expect("initial schema should apply");
+            conn.execute_batch(include_str!("sql/002_audit_read_events.sql"))
+                .expect("v2 migration should apply");
+            conn.execute_batch(include_str!("sql/003_sticky_capture_audit_event.sql"))
+                .expect("v3 migration should apply");
+            conn.pragma_update(None, "user_version", 3)
+                .expect("schema version should set");
+            conn.execute(
+                "INSERT INTO workspaces (
+                    name, description, color, agent_access, sticky_capture, retention_days, created_at
+                 ) VALUES ('inbox', NULL, NULL, 0, 0, NULL, ?1)",
+                [Utc::now()],
+            )
+            .expect("workspace should insert");
+            conn.execute(
+                "INSERT INTO blips (
+                    id, workspace_name, content_type, content, size_bytes, tags_json, created_at
+                 ) VALUES ('existing-blip', 'inbox', 'plain_text', 'historical login note', 21, '[]', ?1)",
+                [Utc::now()],
+            )
+            .expect("historical blip should insert");
+        }
+
+        let store = BlipStore::open(&db_path).expect("store should migrate");
+
+        let results = store
+            .search_blip_summaries("inbox", "historical", 50)
+            .expect("migrated FTS index should search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "existing-blip");
+
+        let schema_version = store
+            .connection()
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i32>(0))
+            .expect("schema version should be readable");
+        assert_eq!(schema_version, SCHEMA_VERSION);
+
+        let _ = std::fs::remove_file(db_path);
     }
 
     #[test]
@@ -1243,6 +1435,138 @@ mod tests {
         assert!(matches!(
             inbox_denied,
             BlipError::AgentAccessDenied(workspace) if workspace == "inbox"
+        ));
+    }
+
+    #[test]
+    fn search_blips_filters_by_workspace_and_query() {
+        let mut store = store_with_workspace("auth-bug");
+        store
+            .create_workspace(&NewWorkspace {
+                name: "notes".into(),
+                description: None,
+                color: None,
+                agent_access: false,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should be created");
+        let auth_match = store
+            .insert_blip(&NewBlip {
+                workspace_name: "auth-bug".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "login timeout in auth callback".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("matching blip should insert");
+        store
+            .insert_blip(&NewBlip {
+                workspace_name: "auth-bug".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "billing timeout in webhook".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("nonmatching blip should insert");
+        store
+            .insert_blip(&NewBlip {
+                workspace_name: "notes".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "login timeout in another workspace".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("cross-workspace blip should insert");
+
+        let results = store
+            .search_blip_summaries("auth-bug", "login", 50)
+            .expect("search should work");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, auth_match.id);
+        assert_eq!(results[0].preview, "login timeout in auth callback");
+    }
+
+    #[test]
+    fn search_rejects_empty_and_invalid_queries() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+
+        let empty = store
+            .search_blip_summaries("inbox", " ", 50)
+            .expect_err("empty search query should fail");
+        assert!(matches!(
+            empty,
+            BlipError::InvalidInput {
+                field: "search.query",
+                ..
+            }
+        ));
+
+        let invalid = store
+            .search_blip_summaries("inbox", "\"unterminated", 50)
+            .expect_err("invalid FTS query should fail");
+        assert!(matches!(invalid, BlipError::InvalidSearchQuery(_)));
+    }
+
+    #[test]
+    fn agent_search_enforces_access_policy_and_audits_reads() {
+        let mut store = store_with_workspace("human-only");
+        store
+            .create_workspace(&NewWorkspace {
+                name: "agent-feed".into(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("agent workspace should be created");
+        store
+            .insert_blip(&NewBlip {
+                workspace_name: "agent-feed".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "deploy rollback note".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("agent blip should insert");
+
+        let results = store
+            .search_agent_blips("agent-feed", "rollback", 50)
+            .expect("agent search should work");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content, "deploy rollback note");
+
+        let audit_events = store.list_audit_events().expect("audit list should work");
+        assert!(audit_events.iter().any(|event| {
+            event.actor_type == ActorType::Agent
+                && event.event_type == AuditEventType::BlipsRead
+                && event.target_workspace.as_deref() == Some("agent-feed")
+                && event.details_json.as_deref().is_some_and(|details| {
+                    details.contains("\"query\":\"rollback\"")
+                        && details.contains("\"result_count\":1")
+                })
+        }));
+
+        let denied = store
+            .search_agent_blips("human-only", "rollback", 50)
+            .expect_err("human-only workspace should be denied");
+        assert!(matches!(
+            denied,
+            BlipError::AgentAccessDenied(workspace) if workspace == "human-only"
         ));
     }
 
