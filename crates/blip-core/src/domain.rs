@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::BlipError;
 
@@ -94,6 +95,63 @@ pub struct NewBlip {
     pub token_estimate: Option<i64>,
     pub is_redacted: bool,
     pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PayloadKind {
+    Text,
+    Image,
+    FileList,
+    Html,
+    Rtf,
+    Unknown,
+}
+
+impl PayloadKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Image => "image",
+            Self::FileList => "file_list",
+            Self::Html => "html",
+            Self::Rtf => "rtf",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, BlipError> {
+        match value {
+            "text" => Ok(Self::Text),
+            "image" => Ok(Self::Image),
+            "file_list" => Ok(Self::FileList),
+            "html" => Ok(Self::Html),
+            "rtf" => Ok(Self::Rtf),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(BlipError::InvalidPersistedValue {
+                field: "payload_kind",
+                value: value.to_owned(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipboardPayload {
+    pub id: String,
+    pub blip_id: String,
+    pub kind: PayloadKind,
+    pub mime_type: Option<String>,
+    pub platform_format: Option<String>,
+    pub byte_size: i64,
+    pub content_hash: Option<String>,
+    pub source_app: Option<String>,
+    pub captured_at: DateTime<Utc>,
+    pub preview_ref: Option<String>,
+    pub blob_ref: Option<String>,
+    pub inline_text: Option<String>,
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

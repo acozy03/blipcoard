@@ -1,6 +1,6 @@
 use crate::domain::{
-    ActorType, AuditEvent, AuditEventType, Blip, BlipMove, BlipSummary, ContentType, NewBlip,
-    NewWorkspace, Workspace,
+    ActorType, AuditEvent, AuditEventType, Blip, BlipMove, BlipSummary, ClipboardPayload,
+    ContentType, NewBlip, NewWorkspace, PayloadKind, Workspace,
 };
 use crate::error::{BlipError, is_sqlite_busy_error};
 use crate::secrets::add_secret_tags;
@@ -19,7 +19,7 @@ const DEFAULT_BLIP_PREVIEW_CHARS: i64 = 72;
 const BUSY_RETRY_ATTEMPTS: usize = 5;
 const BUSY_RETRY_DELAY: Duration = Duration::from_millis(25);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 
 struct Migration {
     version: i32,
@@ -42,6 +42,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 4,
         sql: include_str!("sql/004_blips_fts.sql"),
+    },
+    Migration {
+        version: 5,
+        sql: include_str!("sql/005_typed_payloads.sql"),
     },
 ];
 
@@ -379,6 +383,8 @@ impl BlipStore {
             ],
         )?;
 
+        Self::insert_text_payload(&tx, &id, new_blip, size_bytes, created_at)?;
+
         Self::insert_audit_event(
             &tx,
             ActorType::System,
@@ -400,6 +406,10 @@ impl BlipStore {
         Self::get_blip_from(&self.conn, id)
     }
 
+    pub fn get_blip_payloads(&self, blip_id: &str) -> Result<Vec<ClipboardPayload>, BlipError> {
+        Self::get_blip_payloads_from(&self.conn, blip_id)
+    }
+
     fn get_blip_from(conn: &Connection, id: &str) -> Result<Option<Blip>, BlipError> {
         let mut stmt = conn.prepare(
             "SELECT id, workspace_name, source_app, content_type, language, content, size_bytes,
@@ -413,6 +423,29 @@ impl BlipStore {
         };
 
         Ok(Some(map_blip_row(row)?))
+    }
+
+    fn get_blip_payloads_from(
+        conn: &Connection,
+        blip_id: &str,
+    ) -> Result<Vec<ClipboardPayload>, BlipError> {
+        let mut stmt = conn.prepare(
+            "SELECT id, blip_id, payload_kind, mime_type, platform_format, byte_size,
+                    content_hash, source_app, captured_at, preview_ref, blob_ref, inline_text,
+                    metadata_json, created_at
+             FROM blip_payloads
+             WHERE blip_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )?;
+
+        let mut rows = stmt.query([blip_id])?;
+        let mut payloads = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            payloads.push(map_payload_row(row)?);
+        }
+
+        Ok(payloads)
     }
 
     pub fn list_blips(&self, workspace_name: &str) -> Result<Vec<Blip>, BlipError> {
@@ -827,6 +860,31 @@ impl BlipStore {
         Ok(())
     }
 
+    fn insert_text_payload(
+        conn: &Connection,
+        blip_id: &str,
+        blip: &NewBlip,
+        size_bytes: i64,
+        created_at: DateTime<Utc>,
+    ) -> Result<(), BlipError> {
+        conn.execute(
+            "INSERT INTO blip_payloads (
+                id, blip_id, payload_kind, mime_type, platform_format, byte_size, content_hash,
+                source_app, captured_at, preview_ref, blob_ref, inline_text, metadata_json, created_at
+             ) VALUES (?1, ?2, ?3, 'text/plain', NULL, ?4, NULL, ?5, ?6, NULL, NULL, ?7, '{}', ?6)",
+            params![
+                format!("{blip_id}:payload:text"),
+                blip_id,
+                PayloadKind::Text.as_str(),
+                size_bytes,
+                blip.source_app,
+                created_at,
+                blip.content,
+            ],
+        )?;
+        Ok(())
+    }
+
     fn insert_audit_event(
         conn: &Connection,
         actor_type: ActorType,
@@ -985,6 +1043,28 @@ fn map_blip_summary_row(row: &rusqlite::Row<'_>) -> Result<BlipSummary, BlipErro
     })
 }
 
+fn map_payload_row(row: &rusqlite::Row<'_>) -> Result<ClipboardPayload, BlipError> {
+    let metadata_json: String = row.get(12)?;
+    let metadata = serde_json::from_str(&metadata_json)?;
+
+    Ok(ClipboardPayload {
+        id: row.get(0)?,
+        blip_id: row.get(1)?,
+        kind: PayloadKind::parse(row.get::<_, String>(2)?.as_str())?,
+        mime_type: row.get(3)?,
+        platform_format: row.get(4)?,
+        byte_size: row.get(5)?,
+        content_hash: row.get(6)?,
+        source_app: row.get(7)?,
+        captured_at: row.get::<_, DateTime<Utc>>(8)?,
+        preview_ref: row.get(9)?,
+        blob_ref: row.get(10)?,
+        inline_text: row.get(11)?,
+        metadata,
+        created_at: row.get::<_, DateTime<Utc>>(13)?,
+    })
+}
+
 fn sqlite_limit(limit: usize) -> i64 {
     i64::try_from(limit.min(MAX_LIST_LIMIT)).unwrap_or(MAX_LIST_LIMIT as i64)
 }
@@ -1031,6 +1111,50 @@ mod tests {
     }
 
     #[test]
+    fn payload_kind_parses_persisted_values() {
+        assert_eq!(
+            PayloadKind::parse("text").expect("text should parse"),
+            PayloadKind::Text
+        );
+        assert_eq!(
+            PayloadKind::parse("image").expect("image should parse"),
+            PayloadKind::Image
+        );
+        assert_eq!(
+            PayloadKind::parse("file_list").expect("file list should parse"),
+            PayloadKind::FileList
+        );
+        assert_eq!(
+            PayloadKind::parse("html").expect("html should parse"),
+            PayloadKind::Html
+        );
+        assert_eq!(
+            PayloadKind::parse("rtf").expect("rtf should parse"),
+            PayloadKind::Rtf
+        );
+        assert_eq!(
+            PayloadKind::parse("unknown").expect("unknown should parse"),
+            PayloadKind::Unknown
+        );
+
+        let error = PayloadKind::parse("binary").expect_err("unknown kind should fail");
+        assert!(matches!(
+            error,
+            BlipError::InvalidPersistedValue {
+                field: "payload_kind",
+                ..
+            }
+        ));
+
+        let json =
+            serde_json::to_string(&PayloadKind::FileList).expect("payload kind should serialize");
+        assert_eq!(json, "\"file_list\"");
+        let decoded: PayloadKind =
+            serde_json::from_str("\"file_list\"").expect("payload kind JSON should decode");
+        assert_eq!(decoded, PayloadKind::FileList);
+    }
+
+    #[test]
     fn migration_backfills_existing_blips_into_fts_index() {
         let db_path =
             std::env::temp_dir().join(format!("blipcoard-fts-migration-{}.db", Uuid::new_v4()));
@@ -1067,6 +1191,66 @@ mod tests {
             .expect("migrated FTS index should search");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "existing-blip");
+
+        let schema_version = store
+            .connection()
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i32>(0))
+            .expect("schema version should be readable");
+        assert_eq!(schema_version, SCHEMA_VERSION);
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn migration_backfills_existing_text_blips_into_payloads() {
+        let db_path =
+            std::env::temp_dir().join(format!("blipcoard-payload-migration-{}.db", Uuid::new_v4()));
+        {
+            let conn = Connection::open(&db_path).expect("database should open");
+            conn.execute_batch(include_str!("sql/001_initial.sql"))
+                .expect("initial schema should apply");
+            conn.execute_batch(include_str!("sql/002_audit_read_events.sql"))
+                .expect("v2 migration should apply");
+            conn.execute_batch(include_str!("sql/003_sticky_capture_audit_event.sql"))
+                .expect("v3 migration should apply");
+            conn.execute_batch(include_str!("sql/004_blips_fts.sql"))
+                .expect("v4 migration should apply");
+            conn.pragma_update(None, "user_version", 4)
+                .expect("schema version should set");
+            conn.execute(
+                "INSERT INTO workspaces (
+                    name, description, color, agent_access, sticky_capture, retention_days, created_at
+                 ) VALUES ('inbox', NULL, NULL, 0, 0, NULL, ?1)",
+                ["2026-06-21T12:34:56Z"],
+            )
+            .expect("workspace should insert");
+            conn.execute(
+                "INSERT INTO blips (
+                    id, workspace_name, source_app, content_type, content, size_bytes, tags_json, created_at
+                 ) VALUES ('existing-blip', 'inbox', 'Terminal', 'plain_text', 'historical note', 15, '[]', ?1)",
+                ["2026-06-21T12:35:56Z"],
+            )
+            .expect("historical blip should insert");
+        }
+
+        let store = BlipStore::open(&db_path).expect("store should migrate");
+        let blip = store
+            .get_blip("existing-blip")
+            .expect("legacy blip should decode")
+            .expect("legacy blip should exist");
+        let payloads = store
+            .get_blip_payloads("existing-blip")
+            .expect("payloads should decode");
+
+        assert_eq!(blip.content, "historical note");
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0].id, "existing-blip:payload:text");
+        assert_eq!(payloads[0].kind, PayloadKind::Text);
+        assert_eq!(payloads[0].mime_type.as_deref(), Some("text/plain"));
+        assert_eq!(payloads[0].source_app.as_deref(), Some("Terminal"));
+        assert_eq!(payloads[0].inline_text.as_deref(), Some("historical note"));
+        assert!(payloads[0].blob_ref.is_none());
+        assert_eq!(payloads[0].metadata, serde_json::json!({}));
 
         let schema_version = store
             .connection()
@@ -1126,6 +1310,94 @@ mod tests {
         let blips = store.list_blips("auth-bug").expect("list should work");
         assert_eq!(blips.len(), 1);
         assert_eq!(blips[0].id, blip.id);
+    }
+
+    #[test]
+    fn insert_blip_writes_backward_compatible_text_payload() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+
+        let blip = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".into(),
+                source_app: Some("Safari".into()),
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "copied text".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("blip should insert");
+
+        let payloads = store
+            .get_blip_payloads(&blip.id)
+            .expect("payloads should list");
+
+        assert_eq!(blip.content, "copied text");
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0].blip_id, blip.id);
+        assert_eq!(payloads[0].kind, PayloadKind::Text);
+        assert_eq!(payloads[0].mime_type.as_deref(), Some("text/plain"));
+        assert_eq!(payloads[0].byte_size, "copied text".len() as i64);
+        assert_eq!(payloads[0].source_app.as_deref(), Some("Safari"));
+        assert_eq!(payloads[0].inline_text.as_deref(), Some("copied text"));
+        assert!(payloads[0].blob_ref.is_none());
+    }
+
+    #[test]
+    fn payload_schema_rejects_binary_inline_text_negative_size_and_orphans() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let blip = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "schema checks".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("blip should insert");
+
+        let binary_inline = store
+            .connection()
+            .execute(
+                "INSERT INTO blip_payloads (
+                    id, blip_id, payload_kind, byte_size, captured_at, inline_text, metadata_json, created_at
+                 ) VALUES ('bad-inline', ?1, 'image', 5, ?2, 'abcde', '{}', ?2)",
+                params![blip.id, Utc::now()],
+            )
+            .expect_err("binary payloads should not allow inline text");
+        assert!(matches!(
+            binary_inline,
+            rusqlite::Error::SqliteFailure(_, Some(_))
+        ));
+
+        let negative_size = store
+            .connection()
+            .execute(
+                "INSERT INTO blip_payloads (
+                    id, blip_id, payload_kind, byte_size, captured_at, metadata_json, created_at
+                 ) VALUES ('bad-size', ?1, 'text', -1, ?2, '{}', ?2)",
+                params![blip.id, Utc::now()],
+            )
+            .expect_err("negative payload sizes should fail");
+        assert!(matches!(
+            negative_size,
+            rusqlite::Error::SqliteFailure(_, Some(_))
+        ));
+
+        let orphan = store
+            .connection()
+            .execute(
+                "INSERT INTO blip_payloads (
+                    id, blip_id, payload_kind, byte_size, captured_at, metadata_json, created_at
+                 ) VALUES ('bad-orphan', 'missing-blip', 'text', 1, ?1, '{}', ?1)",
+                [Utc::now()],
+            )
+            .expect_err("orphan payloads should fail");
+        assert!(matches!(orphan, rusqlite::Error::SqliteFailure(_, Some(_))));
     }
 
     #[test]
@@ -1888,6 +2160,78 @@ mod tests {
         let error = store
             .get_blip("bad-tags")
             .expect_err("invalid persisted JSON should surface");
+
+        assert!(matches!(error, BlipError::Serialization(_)));
+    }
+
+    #[test]
+    fn invalid_persisted_payload_kind_returns_error() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let blip = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "payload kind validation".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("blip should insert");
+
+        store
+            .connection()
+            .execute("PRAGMA ignore_check_constraints = ON", [])
+            .expect("test should bypass check constraints");
+        store
+            .connection()
+            .execute(
+                "UPDATE blip_payloads SET payload_kind = 'unsupported' WHERE blip_id = ?1",
+                [&blip.id],
+            )
+            .expect("test payload should corrupt");
+
+        let error = store
+            .get_blip_payloads(&blip.id)
+            .expect_err("invalid payload kind should fail to decode");
+
+        assert!(matches!(
+            error,
+            BlipError::InvalidPersistedValue {
+                field: "payload_kind",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn invalid_persisted_payload_metadata_returns_error() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let blip = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "payload metadata validation".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("blip should insert");
+
+        store
+            .connection()
+            .execute(
+                "UPDATE blip_payloads SET metadata_json = 'not-json' WHERE blip_id = ?1",
+                [&blip.id],
+            )
+            .expect("test payload should corrupt");
+
+        let error = store
+            .get_blip_payloads(&blip.id)
+            .expect_err("invalid metadata JSON should fail to decode");
 
         assert!(matches!(error, BlipError::Serialization(_)));
     }
