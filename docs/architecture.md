@@ -389,9 +389,13 @@ Human-facing commands, for example:
 
 Scoped reads only:
 
-- `blip agent recent`
+- `blip agent recent auth-bug`
 - `blip agent search "jwt"`
 - `blip agent bundle`
+
+Agent-facing commands require an explicit readable workspace. The default
+`inbox` workspace is a human triage queue and is not agent-readable by default;
+agent attempts to read it should fail with a clear policy denial.
 
 ### Desktop UI
 

@@ -88,6 +88,14 @@ These operations must go through `blipd` once the daemon API exists:
 - policy or privacy setting changes
 - rich payload preview, export, or raw byte access in later phases
 
+Agent-facing reads are scoped by workspace. The current agent read command,
+`blip agent recent <workspace>`, is daemon-mediated and returns full blip
+content only when that workspace has `agent_access` enabled. The default `inbox`
+workspace is created with `agent_access = false`, so `blip agent recent inbox`
+returns an `access_denied` daemon error unless a future explicit policy change
+grants broader access. Human-facing inbox commands remain separate from agent
+read commands.
+
 The daemon should attach the client kind to policy and audit decisions where it
 matters. Expected client kinds are:
 
