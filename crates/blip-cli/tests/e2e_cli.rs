@@ -303,6 +303,32 @@ fn health_reports_when_daemon_socket_is_unavailable() {
         ));
 }
 
+#[test]
+fn agent_reads_require_the_daemon_socket() {
+    let temp = tempdir().expect("tempdir should exist");
+    let db_path = temp.path().join("blipcoard-test.db");
+    let socket_path = temp.path().join("missing-daemon.sock");
+
+    blip_command(&db_path)
+        .args(["create", "agent-feed", "--agent-access"])
+        .assert()
+        .success();
+
+    blip_command(&db_path)
+        .args(["add-demo", "agent-feed", "Agent-visible deployment note"])
+        .assert()
+        .success();
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["agent", "recent", "agent-feed", "--output", "json"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "daemon is not running at the configured socket",
+        ));
+}
+
 fn assert_json_success(mut cmd: Command, args: &[&str]) -> Value {
     let assert = cmd
         .args(args)
