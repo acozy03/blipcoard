@@ -4,6 +4,7 @@ use crate::domain::{
 };
 use crate::error::{BlipError, is_sqlite_busy_error};
 use crate::secrets::add_secret_tags;
+use crate::typing::{add_type_tag, resolved_content_type};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
 use std::path::Path;
@@ -350,7 +351,11 @@ impl BlipStore {
 
         let id = Uuid::new_v4().to_string();
         let created_at = Utc::now();
-        let tags = add_secret_tags(&new_blip.content, &new_blip.tags);
+        let content_type = resolved_content_type(new_blip.content_type, &new_blip.content);
+        let tags = add_secret_tags(
+            &new_blip.content,
+            &add_type_tag(content_type, &new_blip.tags),
+        );
         let tags_json = serde_json::to_string(&tags)?;
         let size_bytes = new_blip.content.len() as i64;
 
@@ -363,7 +368,7 @@ impl BlipStore {
                 id,
                 new_blip.workspace_name,
                 new_blip.source_app,
-                new_blip.content_type.as_str(),
+                content_type.as_str(),
                 new_blip.language,
                 new_blip.content,
                 size_bytes,
@@ -1146,6 +1151,7 @@ mod tests {
             blip.tags,
             vec![
                 "clipboard".to_string(),
+                "type:plain_text".to_string(),
                 "secret".to_string(),
                 "secret:assignment".to_string(),
             ]
@@ -1161,10 +1167,32 @@ mod tests {
             summary.tags,
             vec![
                 "clipboard".to_string(),
+                "type:plain_text".to_string(),
                 "secret".to_string(),
                 "secret:assignment".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn insert_blip_infers_content_type_and_adds_type_tag() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+
+        let blip = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "{\"ok\":true}".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("blip should be inserted");
+
+        assert_eq!(blip.content_type, ContentType::Json);
+        assert_eq!(blip.tags, vec!["type:json".to_string()]);
     }
 
     #[test]

@@ -114,6 +114,7 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
         .args(["inbox"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("[type:plain_text]"))
         .stdout(predicate::str::contains("Copied inbox note"));
 
     blip_command_with_socket(&db_path, &socket_path)
@@ -245,6 +246,20 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
             .iter()
             .any(|blip| blip["preview"] == "Copied inbox note")
     );
+    assert!(
+        inbox["blips"]
+            .as_array()
+            .expect("inbox blips should be an array")
+            .iter()
+            .any(|blip| {
+                blip["preview"] == "Copied inbox note"
+                    && blip["tags"]
+                        .as_array()
+                        .expect("tags should be an array")
+                        .iter()
+                        .any(|tag| tag == "type:plain_text")
+            })
+    );
 
     let routed = assert_json_success(
         blip_command_with_socket(&db_path, &socket_path),
@@ -362,6 +377,7 @@ fn cli_surfaces_secret_detection_in_list_output() {
         .args(["inbox"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("[type:plain_text]"))
         .stdout(predicate::str::contains("[secret]"))
         .stdout(predicate::str::contains("api_key = abcdef1234567890"));
 
