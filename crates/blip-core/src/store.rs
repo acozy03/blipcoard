@@ -344,7 +344,7 @@ impl BlipStore {
                     token_estimate, is_redacted, tags_json, created_at
              FROM blips
              WHERE workspace_name = ?1
-             ORDER BY created_at DESC, id DESC
+             ORDER BY created_at DESC, rowid DESC
              LIMIT ?2",
         )?;
 
@@ -373,7 +373,7 @@ impl BlipStore {
                     created_at
              FROM blips
              WHERE workspace_name = ?1
-             ORDER BY created_at DESC, id DESC
+             ORDER BY created_at DESC, rowid DESC
              LIMIT ?3",
         )?;
 
@@ -429,7 +429,7 @@ impl BlipStore {
             .query_row(
                 "SELECT id FROM blips
                  WHERE workspace_name = ?1
-                 ORDER BY created_at DESC, id DESC
+                 ORDER BY created_at DESC, rowid DESC
                  LIMIT 1",
                 [INBOX_WORKSPACE],
                 |row| row.get::<_, String>(0),
@@ -836,6 +836,27 @@ mod tests {
     }
 
     #[test]
+    fn latest_inbox_routing_uses_insert_order_when_timestamps_match() {
+        let mut store = store_with_workspace("auth-bug");
+        insert_raw_blip(&store, "z-older", "inbox", "older same-time note");
+        insert_raw_blip(&store, "a-newer", "inbox", "newer same-time note");
+
+        let moved = store
+            .move_latest_inbox_blip("auth-bug")
+            .expect("latest same-timestamp inbox blip should move");
+
+        assert_eq!(moved.id, "a-newer");
+        assert_eq!(
+            store
+                .list_blips("auth-bug")
+                .expect("target list should work")
+                .first()
+                .map(|blip| blip.id.as_str()),
+            Some("a-newer")
+        );
+    }
+
+    #[test]
     fn moves_specific_blip_between_workspaces_for_recovery() {
         let mut store = store_with_workspace("auth-bug");
         let blip = store
@@ -1238,5 +1259,22 @@ mod tests {
             })
             .expect("workspace should be created");
         store
+    }
+
+    fn insert_raw_blip(store: &BlipStore, id: &str, workspace: &str, content: &str) {
+        store
+            .connection()
+            .execute(
+                "INSERT INTO blips (
+                    id, workspace_name, content_type, content, size_bytes, tags_json, created_at
+                 ) VALUES (?1, ?2, 'plain_text', ?3, ?4, '[]', '2026-06-21T12:34:56Z')",
+                params![
+                    id,
+                    workspace,
+                    content,
+                    i64::try_from(content.len()).expect("test content length should fit i64")
+                ],
+            )
+            .expect("raw blip should insert");
     }
 }
