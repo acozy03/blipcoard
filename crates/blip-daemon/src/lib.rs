@@ -207,6 +207,8 @@ where
                                     id: blip.id,
                                     preview: blip.preview,
                                     size_bytes: blip.size_bytes,
+                                    is_redacted: blip.is_redacted,
+                                    tags: blip.tags,
                                 })
                                 .collect(),
                         }),
@@ -896,6 +898,8 @@ mod tests {
                     id: inserted.id,
                     preview: "copied text".to_owned(),
                     size_bytes: 11,
+                    is_redacted: false,
+                    tags: Vec::new(),
                 }],
             })),
         );
@@ -1336,6 +1340,33 @@ mod tests {
                 && event.target_blip_id.as_deref() == Some(blips[0].id.as_str())
                 && event.target_workspace.as_deref() == Some("inbox")
         }));
+    }
+
+    #[test]
+    fn runtime_flags_secret_like_clipboard_text() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let source = ScriptedIngestionSource {
+            events: vec![
+                RuntimeEvent::Shutdown,
+                RuntimeEvent::ClipboardTextChanged {
+                    text: "api_key = abcdef1234567890".to_owned(),
+                },
+            ],
+            calls: 0,
+        };
+        let mut runtime = DaemonRuntime::new("/tmp/blipcoard-test.db", store, source);
+
+        runtime.run().expect("runtime should ingest clipboard text");
+
+        let blips = runtime
+            .store
+            .list_blips("inbox")
+            .expect("inbox blips should be listed");
+        assert_eq!(blips.len(), 1);
+        assert_eq!(blips[0].content, "api_key = abcdef1234567890");
+        assert!(!blips[0].is_redacted);
+        assert!(blips[0].tags.contains(&"secret".to_string()));
+        assert!(blips[0].tags.contains(&"secret:assignment".to_string()));
     }
 
     #[test]

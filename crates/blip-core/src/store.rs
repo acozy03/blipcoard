@@ -3,6 +3,7 @@ use crate::domain::{
     NewWorkspace, Workspace,
 };
 use crate::error::{BlipError, is_sqlite_busy_error};
+use crate::secrets::add_secret_tags;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
 use std::path::Path;
@@ -345,7 +346,8 @@ impl BlipStore {
 
         let id = Uuid::new_v4().to_string();
         let created_at = Utc::now();
-        let tags_json = serde_json::to_string(&new_blip.tags)?;
+        let tags = add_secret_tags(&new_blip.content, &new_blip.tags);
+        let tags_json = serde_json::to_string(&tags)?;
         let size_bytes = new_blip.content.len() as i64;
 
         tx.execute(
@@ -927,6 +929,50 @@ mod tests {
         let blips = store.list_blips("auth-bug").expect("list should work");
         assert_eq!(blips.len(), 1);
         assert_eq!(blips[0].id, blip.id);
+    }
+
+    #[test]
+    fn insert_blip_adds_secret_detection_tags_without_mutating_content() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+
+        let blip = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".into(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "api_key = abcdef1234567890".into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: vec!["clipboard".into()],
+            })
+            .expect("blip should be inserted");
+
+        assert!(!blip.is_redacted);
+        assert_eq!(blip.content, "api_key = abcdef1234567890");
+        assert_eq!(
+            blip.tags,
+            vec![
+                "clipboard".to_string(),
+                "secret".to_string(),
+                "secret:assignment".to_string(),
+            ]
+        );
+
+        let summary = store
+            .list_blip_summaries("inbox", 1)
+            .expect("summary list should work")
+            .into_iter()
+            .next()
+            .expect("summary should exist");
+        assert_eq!(
+            summary.tags,
+            vec![
+                "clipboard".to_string(),
+                "secret".to_string(),
+                "secret:assignment".to_string(),
+            ]
+        );
     }
 
     #[test]

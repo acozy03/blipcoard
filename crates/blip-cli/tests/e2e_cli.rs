@@ -288,6 +288,51 @@ fn cli_rejects_duplicate_workspace_creation() {
 }
 
 #[test]
+fn cli_surfaces_secret_detection_in_list_output() {
+    let temp = tempdir().expect("tempdir should exist");
+    let db_path = temp.path().join("blipcoard-test.db");
+    let socket_path = temp.path().join("blipcoard.sock");
+
+    blip_command(&db_path)
+        .args(["add-demo", "inbox", "api_key = abcdef1234567890"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("created blip"));
+
+    let mut daemon = blip_daemon_command(&db_path, &socket_path)
+        .spawn()
+        .expect("daemon should start");
+    wait_for_socket(&socket_path);
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["inbox"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[secret]"))
+        .stdout(predicate::str::contains("api_key = abcdef1234567890"));
+
+    let inbox = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["inbox", "--output", "json"],
+    );
+    let blip = inbox["blips"]
+        .as_array()
+        .expect("inbox blips should be an array")
+        .first()
+        .expect("secret blip should be present");
+    assert_eq!(blip["is_redacted"], false);
+    assert!(
+        blip["tags"]
+            .as_array()
+            .expect("tags should be an array")
+            .iter()
+            .any(|tag| tag == "secret:assignment")
+    );
+
+    stop_daemon(&mut daemon);
+}
+
+#[test]
 fn health_reports_when_daemon_socket_is_unavailable() {
     let temp = tempdir().expect("tempdir should exist");
     let db_path = temp.path().join("blipcoard-test.db");
