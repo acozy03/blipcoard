@@ -29,6 +29,15 @@ export type AuditEventSummary = {
   created_at: string;
 };
 
+export type ShortcutRegistration = {
+  id: string;
+  label: string;
+  accelerator: string;
+  action: "route_latest_inbox_to_active_workspace";
+  state: "registered" | "conflict" | "unsupported";
+  message: string | null;
+};
+
 export type WorkspaceSummary = {
   name: string;
   agent_access: boolean;
@@ -49,6 +58,10 @@ export type BlipListResponse = {
 
 export type AuditEventListResponse = {
   events: AuditEventSummary[];
+};
+
+export type ShortcutRegistrationResponse = {
+  shortcuts: ShortcutRegistration[];
 };
 
 type TauriCore = {
@@ -188,6 +201,15 @@ const DEV_AUDIT_EVENTS: AuditEventSummary[] = [
 
 let devActiveWorkspace = "inbox";
 
+const ROUTE_LATEST_SHORTCUTS = [
+  {
+    id: "route-latest-to-active",
+    label: "Route latest to active",
+    accelerator: "Ctrl+Alt+B",
+    action: "route_latest_inbox_to_active_workspace" as const
+  }
+];
+
 export async function currentWorkspace(): Promise<CurrentWorkspaceResponse> {
   const invoke = getInvoke();
 
@@ -250,6 +272,25 @@ export async function listAuditEvents(limit = 25): Promise<AuditEventListRespons
 
   await devDelay();
   return { events: DEV_AUDIT_EVENTS.slice(0, limit) };
+}
+
+export async function registerGlobalShortcuts(): Promise<ShortcutRegistrationResponse> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    return invoke<ShortcutRegistrationResponse>("register_global_shortcuts", {
+      shortcuts: ROUTE_LATEST_SHORTCUTS
+    });
+  }
+
+  await devDelay();
+  return {
+    shortcuts: ROUTE_LATEST_SHORTCUTS.map((shortcut) => ({
+      ...shortcut,
+      state: "unsupported",
+      message: "Global shortcuts require a desktop runtime"
+    }))
+  };
 }
 
 export async function activateWorkspace(workspace: string): Promise<CurrentWorkspaceResponse> {
