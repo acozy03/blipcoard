@@ -1,8 +1,8 @@
 use blip_api::{
-    AgentBlipListResponse, BlipListResponse, BlipRoutedResponse, CurrentWorkspaceResponse,
-    DAEMON_API_VERSION, DaemonApiError, DaemonCommand, DaemonRequest, DaemonRequestPayload,
-    DaemonResponse, DaemonResponsePayload, DaemonResponseStatus, DaemonVersionResponse,
-    HealthResponse, WorkspaceListResponse,
+    AgentBlipListResponse, BlipDetail, BlipListResponse, BlipRoutedResponse,
+    CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonCommand, DaemonRequest,
+    DaemonRequestPayload, DaemonResponse, DaemonResponsePayload, DaemonResponseStatus,
+    DaemonVersionResponse, HealthResponse, WorkspaceListResponse,
 };
 use blip_config::{BlipConfig, ConfigError};
 use std::error::Error;
@@ -128,6 +128,24 @@ impl DaemonClient {
             Some(DaemonResponsePayload::Blips(blips)) => Ok(blips),
             other => Err(DaemonClientError::UnexpectedPayload {
                 command: DaemonCommand::ListBlips,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn blip(&self, blip_id: &str) -> Result<BlipDetail, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("blip"),
+            DaemonCommand::GetBlip,
+            DaemonRequestPayload::GetBlip {
+                blip_id: blip_id.to_owned(),
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::Blip(blip)) => Ok(blip),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::GetBlip,
                 payload: payload_name(other.as_ref()),
             }),
         }
@@ -325,6 +343,7 @@ fn payload_name(payload: Option<&DaemonResponsePayload>) -> &'static str {
         Some(DaemonResponsePayload::WorkspaceActivated(_)) => "workspace_activated",
         Some(DaemonResponsePayload::Workspaces(_)) => "workspaces",
         Some(DaemonResponsePayload::Blips(_)) => "blips",
+        Some(DaemonResponsePayload::Blip(_)) => "blip",
         Some(DaemonResponsePayload::AgentBlips(_)) => "agent_blips",
         Some(DaemonResponsePayload::BlipRouted(_)) => "blip_routed",
         None => "none",

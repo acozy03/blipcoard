@@ -14,8 +14,10 @@ import {
 import {
   activateWorkspace,
   currentWorkspace,
+  getBlip,
   listWorkspaceBlips,
   listWorkspaces,
+  type BlipDetail,
   type BlipSummary,
   type WorkspaceSummary
 } from "./daemon";
@@ -36,6 +38,12 @@ type BlipState =
   | { status: "ready"; workspace: string; blips: BlipSummary[] }
   | { status: "error"; workspace: string; message: string };
 
+type DetailState =
+  | { status: "idle" }
+  | { status: "loading"; blipId: string }
+  | { status: "ready"; blip: BlipDetail }
+  | { status: "error"; blipId: string; message: string };
+
 function App() {
   const [workspaceState, setWorkspaceState] = React.useState<WorkspaceState>({
     status: "loading"
@@ -43,11 +51,35 @@ function App() {
   const [selectedWorkspace, setSelectedWorkspace] = React.useState<string | null>(null);
   const selectedWorkspaceRef = React.useRef<string | null>(null);
   const blipRequestRef = React.useRef(0);
+  const detailRequestRef = React.useRef(0);
   const [blipState, setBlipState] = React.useState<BlipState>({ status: "idle" });
+  const [selectedBlipId, setSelectedBlipId] = React.useState<string | null>(null);
+  const [detailState, setDetailState] = React.useState<DetailState>({ status: "idle" });
 
   React.useEffect(() => {
     selectedWorkspaceRef.current = selectedWorkspace;
   }, [selectedWorkspace]);
+
+  const loadDetail = React.useCallback((blipId: string) => {
+    const requestId = detailRequestRef.current + 1;
+    detailRequestRef.current = requestId;
+    setSelectedBlipId(blipId);
+    setDetailState({ status: "loading", blipId });
+    getBlip(blipId)
+      .then((blip) => {
+        if (detailRequestRef.current === requestId) {
+          setDetailState({ status: "ready", blip });
+        }
+      })
+      .catch((error: unknown) => {
+        if (detailRequestRef.current !== requestId) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : "Unable to load blip";
+        setDetailState({ status: "error", blipId, message });
+      });
+  }, []);
 
   const loadBlips = React.useCallback((workspace: string) => {
     const requestId = blipRequestRef.current + 1;
@@ -57,6 +89,14 @@ function App() {
       .then((response) => {
         if (blipRequestRef.current === requestId) {
           setBlipState({ status: "ready", workspace: response.workspace, blips: response.blips });
+          const firstBlip = response.blips[0] ?? null;
+
+          if (firstBlip) {
+            loadDetail(firstBlip.id);
+          } else {
+            setSelectedBlipId(null);
+            setDetailState({ status: "idle" });
+          }
         }
       })
       .catch((error: unknown) => {
@@ -66,8 +106,10 @@ function App() {
 
         const message = error instanceof Error ? error.message : "Unable to load workspace";
         setBlipState({ status: "error", workspace, message });
+        setSelectedBlipId(null);
+        setDetailState({ status: "idle" });
       });
-  }, []);
+  }, [loadDetail]);
 
   const refresh = React.useCallback(() => {
     setWorkspaceState({ status: "loading" });
@@ -89,12 +131,16 @@ function App() {
           loadBlips(nextSelection);
         } else {
           setBlipState({ status: "idle" });
+          setSelectedBlipId(null);
+          setDetailState({ status: "idle" });
         }
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : "Unable to load workspaces";
         setWorkspaceState({ status: "error", message });
         setBlipState({ status: "idle" });
+        setSelectedBlipId(null);
+        setDetailState({ status: "idle" });
       });
   }, [loadBlips]);
 
@@ -104,6 +150,8 @@ function App() {
 
   const selectWorkspace = (workspace: string) => {
     setSelectedWorkspace(workspace);
+    setSelectedBlipId(null);
+    setDetailState({ status: "idle" });
     loadBlips(workspace);
   };
 
@@ -170,12 +218,26 @@ function App() {
         <section className="workspace-content">
           {selectedSummary ? (
             <WorkspaceHeader
-              activeWorkspace={workspaceState.status === "ready" ? workspaceState.activeWorkspace : null}
+              activeWorkspace={
+                workspaceState.status === "ready" ? workspaceState.activeWorkspace : null
+              }
               workspace={selectedSummary}
               onActivate={setActiveWorkspace}
             />
           ) : null}
-          <BlipPanel state={blipState} />
+          <div className="workspace-main">
+            <BlipPanel
+              selectedBlipId={selectedBlipId}
+              state={blipState}
+              onSelectBlip={loadDetail}
+            />
+            <BlipDetailPanel
+              activeWorkspace={
+                workspaceState.status === "ready" ? workspaceState.activeWorkspace : null
+              }
+              state={detailState}
+            />
+          </div>
         </section>
       </section>
     </main>
@@ -283,7 +345,15 @@ function WorkspaceHeader({
   );
 }
 
-function BlipPanel({ state }: { state: BlipState }) {
+function BlipPanel({
+  selectedBlipId,
+  state,
+  onSelectBlip
+}: {
+  selectedBlipId: string | null;
+  state: BlipState;
+  onSelectBlip: (blipId: string) => void;
+}) {
   if (state.status === "idle") {
     return <EmptyState title="No workspace selected" />;
   }
@@ -300,7 +370,7 @@ function BlipPanel({ state }: { state: BlipState }) {
     return <EmptyState title="No blips in workspace" />;
   }
 
-  return <BlipList blips={state.blips} />;
+  return <BlipList blips={state.blips} selectedBlipId={selectedBlipId} onSelect={onSelectBlip} />;
 }
 
 function LoadingState({ label }: { label: string }) {
@@ -330,19 +400,109 @@ function EmptyState({ title }: { title: string }) {
   );
 }
 
-function BlipList({ blips }: { blips: BlipSummary[] }) {
+function BlipList({
+  blips,
+  selectedBlipId,
+  onSelect
+}: {
+  blips: BlipSummary[];
+  selectedBlipId: string | null;
+  onSelect: (blipId: string) => void;
+}) {
   return (
     <div className="blip-list">
       {blips.map((blip) => (
-        <article className="blip-row" key={blip.id}>
+        <button
+          className={blip.id === selectedBlipId ? "blip-row selected" : "blip-row"}
+          key={blip.id}
+          type="button"
+          onClick={() => onSelect(blip.id)}
+        >
           <div className="blip-copy">
             <h2>{blip.preview || "Untitled blip"}</h2>
             <p>{blip.id}</p>
           </div>
           <span className="byte-count">{formatBytes(blip.size_bytes)}</span>
-        </article>
+        </button>
       ))}
     </div>
+  );
+}
+
+function BlipDetailPanel({
+  activeWorkspace,
+  state
+}: {
+  activeWorkspace: string | null;
+  state: DetailState;
+}) {
+  if (state.status === "idle") {
+    return <EmptyState title="No blip selected" />;
+  }
+
+  if (state.status === "loading") {
+    return <LoadingState label="Loading detail" />;
+  }
+
+  if (state.status === "error") {
+    return <ErrorState message={state.message} />;
+  }
+
+  const blip = state.blip;
+
+  return (
+    <article className="detail-panel">
+      <header className="detail-header">
+        <div>
+          <p>Blip detail</p>
+          <h2>{blip.id}</h2>
+        </div>
+        <span className={blip.is_redacted ? "redaction-badge redacted" : "redaction-badge"}>
+          {blip.is_redacted ? "Redacted" : "Unredacted"}
+        </span>
+      </header>
+
+      <pre className="detail-content">{blip.content}</pre>
+
+      <dl className="metadata-grid">
+        <div>
+          <dt>Workspace</dt>
+          <dd>{blip.workspace}</dd>
+        </div>
+        <div>
+          <dt>Active workspace</dt>
+          <dd>{activeWorkspace ?? "None"}</dd>
+        </div>
+        <div>
+          <dt>Content type</dt>
+          <dd>{formatMetadata(blip.content_type)}</dd>
+        </div>
+        <div>
+          <dt>Source</dt>
+          <dd>{blip.source_app ?? "Unknown"}</dd>
+        </div>
+        <div>
+          <dt>Language</dt>
+          <dd>{blip.language ?? "None"}</dd>
+        </div>
+        <div>
+          <dt>Size</dt>
+          <dd>{formatBytes(blip.size_bytes)}</dd>
+        </div>
+        <div>
+          <dt>Tokens</dt>
+          <dd>{blip.token_estimate ?? "Unknown"}</dd>
+        </div>
+        <div>
+          <dt>Created</dt>
+          <dd>{formatTimestamp(blip.created_at)}</dd>
+        </div>
+        <div className="metadata-wide">
+          <dt>Tags</dt>
+          <dd>{blip.tags.length > 0 ? blip.tags.join(", ") : "None"}</dd>
+        </div>
+      </dl>
+    </article>
   );
 }
 
@@ -357,6 +517,20 @@ function workspaceStatusLabel(state: WorkspaceState, selectedWorkspace: string |
 
   const count = state.workspaces.length === 1 ? "1 workspace" : `${state.workspaces.length} workspaces`;
   return selectedWorkspace ? `${selectedWorkspace} / ${count}` : count;
+}
+
+function formatMetadata(value: string) {
+  return value.replaceAll("_", " ");
+}
+
+function formatTimestamp(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString();
 }
 
 function formatBytes(sizeBytes: number) {

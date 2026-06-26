@@ -44,6 +44,7 @@ pub enum DaemonCommand {
     ActivateWorkspace,
     ListWorkspaces,
     ListBlips,
+    GetBlip,
     RouteBlip,
     RouteLatestInboxBlip,
     AgentRecentBlips,
@@ -58,6 +59,7 @@ impl DaemonCommand {
             Self::ActivateWorkspace => "activate_workspace",
             Self::ListWorkspaces => "list_workspaces",
             Self::ListBlips => "list_blips",
+            Self::GetBlip => "get_blip",
             Self::RouteBlip => "route_blip",
             Self::RouteLatestInboxBlip => "route_latest_inbox_blip",
             Self::AgentRecentBlips => "agent_recent_blips",
@@ -74,6 +76,7 @@ pub enum DaemonRequestPayload {
     ActivateWorkspace { workspace: String },
     ListWorkspaces,
     ListBlips { workspace: String, limit: usize },
+    GetBlip { blip_id: String },
     RouteBlip { blip_id: String, workspace: String },
     RouteLatestInboxBlip { workspace: String },
     AgentRecentBlips { workspace: String, limit: usize },
@@ -137,6 +140,7 @@ pub enum DaemonResponsePayload {
     WorkspaceActivated(CurrentWorkspaceResponse),
     Workspaces(WorkspaceListResponse),
     Blips(BlipListResponse),
+    Blip(BlipDetail),
     AgentBlips(AgentBlipListResponse),
     BlipRouted(BlipRoutedResponse),
 }
@@ -174,6 +178,21 @@ pub struct BlipSummary {
     pub id: String,
     pub preview: String,
     pub size_bytes: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlipDetail {
+    pub id: String,
+    pub workspace: String,
+    pub source_app: Option<String>,
+    pub content_type: String,
+    pub language: Option<String>,
+    pub content: String,
+    pub size_bytes: i64,
+    pub token_estimate: Option<i64>,
+    pub is_redacted: bool,
+    pub tags: Vec<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -491,6 +510,92 @@ mod tests {
 
         let decoded =
             serde_json::from_value::<DaemonResponse>(value).expect("route response should decode");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn get_blip_request_json_shape_round_trips() {
+        let request = DaemonRequest::new(
+            "request-get-blip",
+            DaemonCommand::GetBlip,
+            DaemonRequestPayload::GetBlip {
+                blip_id: "blip-1".to_owned(),
+            },
+        );
+
+        let value = serde_json::to_value(&request).expect("get blip request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-get-blip",
+                "command": "get_blip",
+                "payload": {
+                    "get_blip": {
+                        "blip_id": "blip-1",
+                    }
+                },
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<DaemonRequest>(value).expect("get blip request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn blip_detail_response_json_shape_round_trips() {
+        let created_at =
+            DateTime::parse_from_rfc3339("2026-06-26T17:30:00Z").expect("timestamp parses");
+        let response = DaemonResponse::ok(
+            "request-get-blip",
+            DaemonCommand::GetBlip,
+            DaemonResponsePayload::Blip(BlipDetail {
+                id: "blip-1".to_owned(),
+                workspace: "auth-bug".to_owned(),
+                source_app: Some("Firefox".to_owned()),
+                content_type: "plain_text".to_owned(),
+                language: None,
+                content: "full workspace content".to_owned(),
+                size_bytes: 22,
+                token_estimate: Some(4),
+                is_redacted: true,
+                tags: vec!["demo".to_owned()],
+                created_at: created_at.with_timezone(&Utc),
+            }),
+        );
+
+        let value = serde_json::to_value(&response).expect("blip response should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-get-blip",
+                "command": "get_blip",
+                "status": "ok",
+                "payload": {
+                    "blip": {
+                        "id": "blip-1",
+                        "workspace": "auth-bug",
+                        "source_app": "Firefox",
+                        "content_type": "plain_text",
+                        "language": null,
+                        "content": "full workspace content",
+                        "size_bytes": 22,
+                        "token_estimate": 4,
+                        "is_redacted": true,
+                        "tags": ["demo"],
+                        "created_at": "2026-06-26T17:30:00Z",
+                    }
+                },
+                "error": null,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<DaemonResponse>(value).expect("blip response should decode");
         assert_eq!(decoded, response);
     }
 
