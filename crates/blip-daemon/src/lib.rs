@@ -7,10 +7,10 @@
 pub mod ipc;
 
 use blip_api::{
-    BlipListResponse, BlipRoutedResponse, BlipSummary, CurrentWorkspaceResponse,
-    DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode, DaemonCommand, DaemonRequest,
-    DaemonRequestPayload, DaemonResponse, DaemonResponsePayload, DaemonVersionResponse,
-    HealthResponse, WorkspaceListResponse, WorkspaceSummary,
+    AgentBlip, AgentBlipListResponse, BlipListResponse, BlipRoutedResponse, BlipSummary,
+    CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode,
+    DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
+    DaemonVersionResponse, HealthResponse, WorkspaceListResponse, WorkspaceSummary,
 };
 use blip_clipboard::{ClipboardError, ClipboardWatcher};
 use blip_core::{BlipError, BlipStore, ContentType, NewBlip};
@@ -203,6 +203,27 @@ where
                 }
             }
             (
+                DaemonCommand::AgentRecentBlips,
+                DaemonRequestPayload::AgentRecentBlips { workspace, limit },
+            ) => match self.store.list_agent_blips(&workspace, limit) {
+                Ok(blips) => DaemonResponse::ok(
+                    request_id,
+                    command,
+                    DaemonResponsePayload::AgentBlips(AgentBlipListResponse {
+                        workspace,
+                        blips: blips
+                            .into_iter()
+                            .map(|blip| AgentBlip {
+                                id: blip.id,
+                                content: blip.content,
+                                size_bytes: blip.size_bytes,
+                            })
+                            .collect(),
+                    }),
+                ),
+                Err(error) => agent_read_error_response(request_id, command, error),
+            },
+            (
                 DaemonCommand::RouteLatestInboxBlip,
                 DaemonRequestPayload::RouteLatestInboxBlip { workspace },
             ) => match self.store.move_latest_inbox_blip(&workspace) {
@@ -309,6 +330,36 @@ fn route_error_response(
             request_id,
             command,
             DaemonApiError::new(DaemonApiErrorCode::NotFound, "inbox is empty"),
+        ),
+        error => DaemonResponse::error(
+            request_id,
+            command,
+            DaemonApiError::new(DaemonApiErrorCode::StoreUnavailable, error.to_string()),
+        ),
+    }
+}
+
+fn agent_read_error_response(
+    request_id: String,
+    command: DaemonCommand,
+    error: BlipError,
+) -> DaemonResponse {
+    match error {
+        BlipError::WorkspaceNotFound(workspace) => DaemonResponse::error(
+            request_id,
+            command,
+            DaemonApiError::new(
+                DaemonApiErrorCode::NotFound,
+                format!("workspace `{workspace}` does not exist"),
+            ),
+        ),
+        BlipError::AgentAccessDenied(workspace) => DaemonResponse::error(
+            request_id,
+            command,
+            DaemonApiError::new(
+                DaemonApiErrorCode::AccessDenied,
+                format!("agent access to workspace `{workspace}` is denied"),
+            ),
         ),
         error => DaemonResponse::error(
             request_id,
@@ -748,6 +799,70 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_returns_agent_recent_blips_for_agent_access_workspace() {
+        let mut store = store_with_agent_workspace("agent-feed");
+        let inserted = insert_test_blip(&mut store, "agent-feed", "agent-visible note");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "agent-recent",
+            DaemonCommand::AgentRecentBlips,
+            DaemonRequestPayload::AgentRecentBlips {
+                workspace: "agent-feed".to_owned(),
+                limit: 50,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        assert_eq!(
+            response.payload,
+            Some(DaemonResponsePayload::AgentBlips(AgentBlipListResponse {
+                workspace: "agent-feed".to_owned(),
+                blips: vec![AgentBlip {
+                    id: inserted.id,
+                    content: "agent-visible note".to_owned(),
+                    size_bytes: 18,
+                }],
+            })),
+        );
+    }
+
+    #[test]
+    fn dispatch_denies_agent_recent_blips_for_human_only_workspace() {
+        let store = store_with_workspace("auth-bug");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "agent-denied",
+            DaemonCommand::AgentRecentBlips,
+            DaemonRequestPayload::AgentRecentBlips {
+                workspace: "auth-bug".to_owned(),
+                limit: 50,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Error);
+        assert_eq!(
+            response.error.map(|error| error.code),
+            Some(DaemonApiErrorCode::AccessDenied)
+        );
+    }
+
+    #[test]
     fn dispatch_routes_latest_inbox_blip_payload() {
         let mut store = store_with_workspace("auth-bug");
         let inserted = insert_test_blip(&mut store, "inbox", "copied note");
@@ -1113,6 +1228,21 @@ mod tests {
                 description: None,
                 color: None,
                 agent_access: false,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should be created");
+        store
+    }
+
+    fn store_with_agent_workspace(workspace: &str) -> BlipStore {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&blip_core::NewWorkspace {
+                name: workspace.to_owned(),
+                description: None,
+                color: None,
+                agent_access: true,
                 sticky_capture: false,
                 retention_days: None,
             })

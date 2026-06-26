@@ -1,8 +1,8 @@
 use blip_api::{
-    BlipListResponse, BlipRoutedResponse, CurrentWorkspaceResponse, DAEMON_API_VERSION,
-    DaemonApiError, DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse,
-    DaemonResponsePayload, DaemonResponseStatus, DaemonVersionResponse, HealthResponse,
-    WorkspaceListResponse,
+    AgentBlipListResponse, BlipListResponse, BlipRoutedResponse, CurrentWorkspaceResponse,
+    DAEMON_API_VERSION, DaemonApiError, DaemonCommand, DaemonRequest, DaemonRequestPayload,
+    DaemonResponse, DaemonResponsePayload, DaemonResponseStatus, DaemonVersionResponse,
+    HealthResponse, WorkspaceListResponse,
 };
 use blip_config::{BlipConfig, ConfigError};
 use std::error::Error;
@@ -128,6 +128,29 @@ impl DaemonClient {
             Some(DaemonResponsePayload::Blips(blips)) => Ok(blips),
             other => Err(DaemonClientError::UnexpectedPayload {
                 command: DaemonCommand::ListBlips,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn agent_recent_blips(
+        &self,
+        workspace: &str,
+        limit: usize,
+    ) -> Result<AgentBlipListResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("agent-recent-blips"),
+            DaemonCommand::AgentRecentBlips,
+            DaemonRequestPayload::AgentRecentBlips {
+                workspace: workspace.to_owned(),
+                limit,
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::AgentBlips(blips)) => Ok(blips),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::AgentRecentBlips,
                 payload: payload_name(other.as_ref()),
             }),
         }
@@ -302,6 +325,7 @@ fn payload_name(payload: Option<&DaemonResponsePayload>) -> &'static str {
         Some(DaemonResponsePayload::WorkspaceActivated(_)) => "workspace_activated",
         Some(DaemonResponsePayload::Workspaces(_)) => "workspaces",
         Some(DaemonResponsePayload::Blips(_)) => "blips",
+        Some(DaemonResponsePayload::AgentBlips(_)) => "agent_blips",
         Some(DaemonResponsePayload::BlipRouted(_)) => "blip_routed",
         None => "none",
     }
@@ -312,6 +336,7 @@ fn error_code_name(code: blip_api::DaemonApiErrorCode) -> &'static str {
         blip_api::DaemonApiErrorCode::UnsupportedApiVersion => "unsupported_api_version",
         blip_api::DaemonApiErrorCode::InvalidRequest => "invalid_request",
         blip_api::DaemonApiErrorCode::NotFound => "not_found",
+        blip_api::DaemonApiErrorCode::AccessDenied => "access_denied",
         blip_api::DaemonApiErrorCode::StoreUnavailable => "store_unavailable",
         blip_api::DaemonApiErrorCode::Internal => "internal",
     }
