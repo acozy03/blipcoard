@@ -7,10 +7,10 @@
 pub mod ipc;
 
 use blip_api::{
-    BlipListResponse, BlipSummary, CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError,
-    DaemonApiErrorCode, DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse,
-    DaemonResponsePayload, DaemonVersionResponse, HealthResponse, WorkspaceListResponse,
-    WorkspaceSummary,
+    BlipListResponse, BlipRoutedResponse, BlipSummary, CurrentWorkspaceResponse,
+    DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode, DaemonCommand, DaemonRequest,
+    DaemonRequestPayload, DaemonResponse, DaemonResponsePayload, DaemonVersionResponse,
+    HealthResponse, WorkspaceListResponse, WorkspaceSummary,
 };
 use blip_clipboard::{ClipboardError, ClipboardWatcher};
 use blip_core::{BlipError, BlipStore, ContentType, NewBlip};
@@ -202,6 +202,35 @@ where
                     ),
                 }
             }
+            (
+                DaemonCommand::RouteLatestInboxBlip,
+                DaemonRequestPayload::RouteLatestInboxBlip { workspace },
+            ) => match self.store.move_latest_inbox_blip(&workspace) {
+                Ok(moved) => DaemonResponse::ok(
+                    request_id,
+                    command,
+                    DaemonResponsePayload::BlipRouted(BlipRoutedResponse {
+                        id: moved.id,
+                        from_workspace: moved.from_workspace,
+                        to_workspace: moved.to_workspace,
+                    }),
+                ),
+                Err(error) => route_error_response(request_id, command, error),
+            },
+            (DaemonCommand::RouteBlip, DaemonRequestPayload::RouteBlip { blip_id, workspace }) => {
+                match self.store.move_blip(&blip_id, &workspace) {
+                    Ok(moved) => DaemonResponse::ok(
+                        request_id,
+                        command,
+                        DaemonResponsePayload::BlipRouted(BlipRoutedResponse {
+                            id: moved.id,
+                            from_workspace: moved.from_workspace,
+                            to_workspace: moved.to_workspace,
+                        }),
+                    ),
+                    Err(error) => route_error_response(request_id, command, error),
+                }
+            }
             _ => DaemonResponse::error(
                 request_id,
                 command,
@@ -251,6 +280,41 @@ where
             .record_ingested(text, observed_at);
 
         Ok(())
+    }
+}
+
+fn route_error_response(
+    request_id: String,
+    command: DaemonCommand,
+    error: BlipError,
+) -> DaemonResponse {
+    match error {
+        BlipError::WorkspaceNotFound(workspace) => DaemonResponse::error(
+            request_id,
+            command,
+            DaemonApiError::new(
+                DaemonApiErrorCode::NotFound,
+                format!("workspace `{workspace}` does not exist"),
+            ),
+        ),
+        BlipError::BlipNotFound(id) => DaemonResponse::error(
+            request_id,
+            command,
+            DaemonApiError::new(
+                DaemonApiErrorCode::NotFound,
+                format!("blip `{id}` does not exist"),
+            ),
+        ),
+        BlipError::InboxEmpty => DaemonResponse::error(
+            request_id,
+            command,
+            DaemonApiError::new(DaemonApiErrorCode::NotFound, "inbox is empty"),
+        ),
+        error => DaemonResponse::error(
+            request_id,
+            command,
+            DaemonApiError::new(DaemonApiErrorCode::StoreUnavailable, error.to_string()),
+        ),
     }
 }
 
@@ -684,6 +748,98 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_routes_latest_inbox_blip_payload() {
+        let mut store = store_with_workspace("auth-bug");
+        let inserted = insert_test_blip(&mut store, "inbox", "copied note");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "route-latest",
+            DaemonCommand::RouteLatestInboxBlip,
+            DaemonRequestPayload::RouteLatestInboxBlip {
+                workspace: "auth-bug".to_owned(),
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        assert_eq!(
+            response.payload,
+            Some(DaemonResponsePayload::BlipRouted(BlipRoutedResponse {
+                id: inserted.id,
+                from_workspace: "inbox".to_owned(),
+                to_workspace: "auth-bug".to_owned(),
+            })),
+        );
+    }
+
+    #[test]
+    fn dispatch_routes_specific_blip_payload() {
+        let mut store = store_with_workspace("auth-bug");
+        let inserted = insert_test_blip(&mut store, "auth-bug", "misrouted note");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "route-id",
+            DaemonCommand::RouteBlip,
+            DaemonRequestPayload::RouteBlip {
+                blip_id: inserted.id.clone(),
+                workspace: "inbox".to_owned(),
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        assert_eq!(
+            response.payload,
+            Some(DaemonResponsePayload::BlipRouted(BlipRoutedResponse {
+                id: inserted.id,
+                from_workspace: "auth-bug".to_owned(),
+                to_workspace: "inbox".to_owned(),
+            })),
+        );
+    }
+
+    #[test]
+    fn dispatch_returns_not_found_for_empty_inbox_route() {
+        let store = store_with_workspace("auth-bug");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "route-empty",
+            DaemonCommand::RouteLatestInboxBlip,
+            DaemonRequestPayload::RouteLatestInboxBlip {
+                workspace: "auth-bug".to_owned(),
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Error);
+        assert_eq!(
+            response.error.map(|error| error.code),
+            Some(DaemonApiErrorCode::NotFound)
+        );
+    }
+
+    #[test]
     fn dispatch_rejects_unsupported_api_version() {
         let store = BlipStore::in_memory().expect("store should initialize");
         let mut runtime = DaemonRuntime::new(
@@ -947,5 +1103,35 @@ mod tests {
         }
 
         panic!("socket was not created at {}", socket_path.display());
+    }
+
+    fn store_with_workspace(workspace: &str) -> BlipStore {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&blip_core::NewWorkspace {
+                name: workspace.to_owned(),
+                description: None,
+                color: None,
+                agent_access: false,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should be created");
+        store
+    }
+
+    fn insert_test_blip(store: &mut BlipStore, workspace: &str, content: &str) -> blip_core::Blip {
+        store
+            .insert_blip(&NewBlip {
+                workspace_name: workspace.to_owned(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: content.to_owned(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("blip should be inserted")
     }
 }

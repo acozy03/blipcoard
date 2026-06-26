@@ -143,6 +143,17 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
             .any(|blip| blip["preview"] == "Copied inbox note")
     );
 
+    let routed = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["send", "auth-bug", "--output", "json"],
+    );
+    let routed_id = routed["id"]
+        .as_str()
+        .expect("routed id should be a string")
+        .to_owned();
+    assert_eq!(routed["from_workspace"], "inbox");
+    assert_eq!(routed["to_workspace"], "auth-bug");
+
     let auth_bug = assert_json_success(
         blip_command_with_socket(&db_path, &socket_path),
         &["list", "auth-bug", "--output", "json"],
@@ -155,6 +166,42 @@ fn cli_can_manage_workspace_and_blips_end_to_end() {
             .iter()
             .any(|blip| blip["preview"] == "TypeError: broken login flow")
     );
+    assert!(
+        auth_bug["blips"]
+            .as_array()
+            .expect("auth-bug blips should be an array")
+            .iter()
+            .any(|blip| blip["id"] == routed_id)
+    );
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["send", "inbox", "--id", &routed_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "routed blip {routed_id} from auth-bug to inbox"
+        )));
+
+    let inbox_after_recovery = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["inbox", "--output", "json"],
+    );
+    assert!(
+        inbox_after_recovery["blips"]
+            .as_array()
+            .expect("inbox blips should be an array")
+            .iter()
+            .any(|blip| blip["id"] == routed_id)
+    );
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["send", "missing", "--id", &routed_id])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "daemon returned not_found: workspace `missing` does not exist",
+        ));
     stop_daemon(&mut daemon);
 
     let agent_access = Connection::open(&db_path)

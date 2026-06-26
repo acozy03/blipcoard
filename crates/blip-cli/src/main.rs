@@ -63,6 +63,13 @@ enum Commands {
     Use {
         workspace: String,
     },
+    Send {
+        workspace: String,
+        #[arg(long)]
+        id: Option<String>,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
     AddDemo {
         workspace: String,
         content: String,
@@ -197,6 +204,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Use { workspace } => {
             DaemonClient::from_config(&config)?.activate_workspace(&workspace)?;
             println!("active workspace set to {workspace}");
+        }
+        Commands::Send {
+            workspace,
+            id,
+            output,
+        } => {
+            let client = DaemonClient::from_config(&config)?;
+            let routed = match id {
+                Some(id) => client.route_blip(&id, &workspace)?,
+                None => client.route_latest_inbox_blip(&workspace)?,
+            };
+            match output {
+                OutputFormat::Human => {
+                    println!(
+                        "routed blip {} from {} to {}",
+                        routed.id, routed.from_workspace, routed.to_workspace
+                    );
+                }
+                OutputFormat::Json => {
+                    serde_json::to_writer(io::stdout().lock(), &routed)?;
+                    println!();
+                }
+            }
         }
         Commands::AddDemo {
             workspace,

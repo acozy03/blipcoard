@@ -44,6 +44,8 @@ pub enum DaemonCommand {
     ActivateWorkspace,
     ListWorkspaces,
     ListBlips,
+    RouteBlip,
+    RouteLatestInboxBlip,
 }
 
 impl DaemonCommand {
@@ -55,6 +57,8 @@ impl DaemonCommand {
             Self::ActivateWorkspace => "activate_workspace",
             Self::ListWorkspaces => "list_workspaces",
             Self::ListBlips => "list_blips",
+            Self::RouteBlip => "route_blip",
+            Self::RouteLatestInboxBlip => "route_latest_inbox_blip",
         }
     }
 }
@@ -68,6 +72,8 @@ pub enum DaemonRequestPayload {
     ActivateWorkspace { workspace: String },
     ListWorkspaces,
     ListBlips { workspace: String, limit: usize },
+    RouteBlip { blip_id: String, workspace: String },
+    RouteLatestInboxBlip { workspace: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +134,7 @@ pub enum DaemonResponsePayload {
     WorkspaceActivated(CurrentWorkspaceResponse),
     Workspaces(WorkspaceListResponse),
     Blips(BlipListResponse),
+    BlipRouted(BlipRoutedResponse),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +170,13 @@ pub struct BlipSummary {
     pub id: String,
     pub preview: String,
     pub size_bytes: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlipRoutedResponse {
+    pub id: String,
+    pub from_workspace: String,
+    pub to_workspace: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -358,6 +372,107 @@ mod tests {
 
         let decoded = serde_json::from_value::<DaemonResponse>(value)
             .expect("activate response should decode");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn route_latest_inbox_request_json_shape_round_trips() {
+        let request = DaemonRequest::new(
+            "request-route-latest",
+            DaemonCommand::RouteLatestInboxBlip,
+            DaemonRequestPayload::RouteLatestInboxBlip {
+                workspace: "auth-bug".to_owned(),
+            },
+        );
+
+        let value = serde_json::to_value(&request).expect("route latest request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-route-latest",
+                "command": "route_latest_inbox_blip",
+                "payload": {
+                    "route_latest_inbox_blip": {
+                        "workspace": "auth-bug",
+                    }
+                },
+            })
+        );
+
+        let decoded = serde_json::from_value::<DaemonRequest>(value)
+            .expect("route latest request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn route_blip_request_json_shape_round_trips() {
+        let request = DaemonRequest::new(
+            "request-route-id",
+            DaemonCommand::RouteBlip,
+            DaemonRequestPayload::RouteBlip {
+                blip_id: "blip-1".to_owned(),
+                workspace: "inbox".to_owned(),
+            },
+        );
+
+        let value = serde_json::to_value(&request).expect("route blip request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-route-id",
+                "command": "route_blip",
+                "payload": {
+                    "route_blip": {
+                        "blip_id": "blip-1",
+                        "workspace": "inbox",
+                    }
+                },
+            })
+        );
+
+        let decoded = serde_json::from_value::<DaemonRequest>(value)
+            .expect("route blip request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn blip_routed_response_json_shape_round_trips() {
+        let response = DaemonResponse::ok(
+            "request-route",
+            DaemonCommand::RouteBlip,
+            DaemonResponsePayload::BlipRouted(BlipRoutedResponse {
+                id: "blip-1".to_owned(),
+                from_workspace: "inbox".to_owned(),
+                to_workspace: "auth-bug".to_owned(),
+            }),
+        );
+
+        let value = serde_json::to_value(&response).expect("route response should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-route",
+                "command": "route_blip",
+                "status": "ok",
+                "payload": {
+                    "blip_routed": {
+                        "id": "blip-1",
+                        "from_workspace": "inbox",
+                        "to_workspace": "auth-bug",
+                    }
+                },
+                "error": null,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<DaemonResponse>(value).expect("route response should decode");
         assert_eq!(decoded, response);
     }
 

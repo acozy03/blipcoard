@@ -26,6 +26,12 @@ pub enum BlipError {
     #[error("workspace `{0}` already exists")]
     WorkspaceAlreadyExists(String),
 
+    #[error("blip `{0}` does not exist")]
+    BlipNotFound(String),
+
+    #[error("inbox is empty")]
+    InboxEmpty,
+
     #[error("active workspace is not set")]
     ActiveWorkspaceNotSet,
 }
