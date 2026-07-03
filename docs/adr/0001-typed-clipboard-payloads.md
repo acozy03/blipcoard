@@ -103,6 +103,36 @@ response fields for compatibility and add typed payload fields additively when
 rich payload capture lands. Older clients should continue to read text-only
 records without requiring typed payload awareness.
 
+## Platform Image Clipboard Behavior
+
+Phase 8.3 image capture normalizes platform clipboard data into typed image
+payload metadata before storage. For every captured image, the daemon-facing
+event should include MIME type, width, height, byte size, original platform
+format, content hash, capture timestamp, and either a blob reference or the
+bytes needed to create one. Unsupported formats must remain typed failures, not
+silent text fallbacks, so callers can distinguish "no image", "unsupported
+format", "clipboard unavailable", and "headless or permission-limited runtime".
+
+Platform expectations:
+
+- macOS readers should inspect pasteboard image types, preferring encodable PNG
+  or TIFF image data when available and preserving the source pasteboard type in
+  `platform_format`.
+- Linux readers should report capabilities separately for X11 and Wayland.
+  X11 can usually read advertised image targets such as `image/png`; Wayland may
+  depend on portal/compositor support and can be unavailable to background or
+  headless processes. CI/headless sessions should return typed unavailable or
+  unsupported errors rather than pretending image capture succeeded.
+- Windows readers should handle bitmap clipboard data, especially DIB/bitmap
+  sources from screenshot and image-copy flows, and prefer PNG when an explicit
+  PNG clipboard format is present. `platform_format` should preserve whether the
+  source was PNG, DIB, bitmap, or another registered format.
+
+Normalized image metadata should use stable field names for `mime_type`,
+`width`, `height`, `byte_size`, and `platform_format`. Width and height describe
+the decoded pixel dimensions. Byte size describes the stored or to-be-stored
+encoded bytes, not an estimated in-memory bitmap size.
+
 ## Consequences
 
 This keeps Phase 8 incremental. Search, summaries, agent bundles, and current

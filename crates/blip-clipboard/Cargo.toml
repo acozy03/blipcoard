@@ -6,6 +6,8 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+arboard.workspace = true
+image.workspace = true
 thiserror.workspace = true
 
 [lints]
