@@ -19,7 +19,9 @@ import {
 import {
   activateWorkspace,
   currentWorkspace,
+  exportPayload,
   getBlip,
+  getPayloadPreview,
   listAuditEvents,
   listWorkspaceBlips,
   listWorkspaces,
@@ -30,6 +32,7 @@ import {
   type BlipDetail,
   type BlipSummary,
   type PayloadSummary,
+  type PayloadBytesResponse,
   type ShortcutRegistration,
   type WorkspaceSummary
 } from "./daemon";
@@ -851,11 +854,15 @@ function SafePayloadPreview({ blip }: { blip: BlipDetail }) {
   }
 
   if (kind === "image") {
+    if (payload?.preview_state === "available") {
+      return <ImagePayloadPreview payload={payload} summary={safeContent} />;
+    }
+
     return (
       <PayloadPlaceholder
         detail={safeContent || "Image metadata is unavailable."}
         kind={kind}
-        title="Image preview withheld"
+        title="Image preview unavailable"
       />
     );
   }
@@ -904,6 +911,89 @@ function SafePayloadPreview({ blip }: { blip: BlipDetail }) {
       ) : null}
     </div>
   );
+}
+
+function ImagePayloadPreview({ payload, summary }: { payload: PayloadSummary; summary: string }) {
+  const [state, setState] = React.useState<
+    | { status: "loading" }
+    | { status: "ready"; objectUrl: string; mimeType: string | null }
+    | { status: "error"; message: string }
+  >({ status: "loading" });
+
+  React.useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+
+    setState({ status: "loading" });
+    getDisplayImagePayload(payload.id)
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+
+        objectUrl = createPayloadObjectUrl(response);
+        setState({
+          status: "ready",
+          objectUrl,
+          mimeType: response.mime_type
+        });
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+
+        const message =
+          error instanceof Error ? error.message : "Unable to load image preview";
+        setState({ status: "error", message });
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [payload.id]);
+
+  if (state.status === "loading") {
+    return (
+      <PayloadPlaceholder detail="Loading image preview." kind="image" title="Image preview" />
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <PayloadPlaceholder
+        detail={state.message}
+        kind="image"
+        title="Image preview unavailable"
+      />
+    );
+  }
+
+  return (
+    <div className="image-preview-panel">
+      <img alt={summary || "Clipboard image preview"} src={state.objectUrl} />
+      <p>{summary || state.mimeType || payload.mime_type || "Image preview"}</p>
+    </div>
+  );
+}
+
+function createPayloadObjectUrl(response: PayloadBytesResponse) {
+  const bytes = Uint8Array.from(response.bytes);
+  const blob = new Blob([bytes], {
+    type: response.mime_type ?? "application/octet-stream"
+  });
+  return URL.createObjectURL(blob);
+}
+
+async function getDisplayImagePayload(payloadId: string) {
+  try {
+    return await exportPayload(payloadId);
+  } catch {
+    return getPayloadPreview(payloadId);
+  }
 }
 
 function PayloadPlaceholder({
