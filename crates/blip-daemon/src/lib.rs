@@ -11,15 +11,15 @@ use blip_api::{
     AuditEventSummary, BlipDetail, BlipListResponse, BlipRoutedResponse, BlipSummary,
     CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode,
     DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
-    DaemonVersionResponse, HealthResponse, PayloadPreviewState, PayloadSummary,
-    WorkspaceListResponse, WorkspaceSummary,
+    DaemonVersionResponse, HealthResponse, PayloadBytesResponse, PayloadPreviewState,
+    PayloadRequester, PayloadSummary, WorkspaceListResponse, WorkspaceSummary,
 };
 use blip_clipboard::{
     ClipboardError, ClipboardFileList, ClipboardImage, ClipboardPayload, ClipboardRichText,
     ClipboardUnknown, ClipboardWatcher,
 };
 use blip_config::CaptureConfig;
-use blip_core::{AuditEvent, Blip};
+use blip_core::{ActorType, AuditEvent, AuditEventType, Blip, PayloadAccessAudit};
 use blip_core::{
     BlipError, BlipStore, ContentType, LocalBlobStore, NewBlip, NewClipboardMetadataPayload,
     NewClipboardPayload, PayloadKind, RichPayloadVisibility, WorkspacePolicy,
@@ -38,6 +38,7 @@ const IMAGE_PREVIEW_MAX_DIMENSION: u32 = 256;
 const PAYLOAD_PREVIEW_TEXT_LIMIT: usize = 4096;
 const PAYLOAD_METADATA_TEXT_LIMIT: usize = 160;
 const FILE_LIST_PREVIEW_PATH_LIMIT: usize = 3;
+const MAX_PAYLOAD_EXPORT_BYTES: u64 = 100 * 1024 * 1024;
 
 pub struct DaemonRuntime<S> {
     database_path: PathBuf,
@@ -414,6 +415,51 @@ where
                             error.to_string(),
                         ),
                     ),
+                }
+            }
+            (
+                DaemonCommand::GetPayloadMetadata,
+                DaemonRequestPayload::GetPayloadMetadata { payload_id },
+            ) => match self.payload_metadata_response(&payload_id) {
+                Ok(payload) => DaemonResponse::ok(
+                    request_id,
+                    command,
+                    DaemonResponsePayload::PayloadMetadata(payload),
+                ),
+                Err(error) => payload_access_error_response(request_id, command, error),
+            },
+            (
+                DaemonCommand::GetPayloadPreview,
+                DaemonRequestPayload::GetPayloadPreview {
+                    payload_id,
+                    requester,
+                },
+            ) => match self.payload_bytes_response(
+                &payload_id,
+                requester,
+                PayloadByteAccess::Preview,
+            ) {
+                Ok(payload) => DaemonResponse::ok(
+                    request_id,
+                    command,
+                    DaemonResponsePayload::PayloadBytes(payload),
+                ),
+                Err(error) => payload_access_error_response(request_id, command, error),
+            },
+            (
+                DaemonCommand::ExportPayload,
+                DaemonRequestPayload::ExportPayload {
+                    payload_id,
+                    requester,
+                },
+            ) => {
+                match self.payload_bytes_response(&payload_id, requester, PayloadByteAccess::Raw) {
+                    Ok(payload) => DaemonResponse::ok(
+                        request_id,
+                        command,
+                        DaemonResponsePayload::PayloadBytes(payload),
+                    ),
+                    Err(error) => payload_access_error_response(request_id, command, error),
                 }
             }
             (DaemonCommand::ListAuditEvents, DaemonRequestPayload::ListAuditEvents { limit }) => {
@@ -945,6 +991,173 @@ where
         })
     }
 
+    fn payload_metadata_response(
+        &self,
+        payload_id: &str,
+    ) -> Result<PayloadSummary, PayloadAccessError> {
+        let context = self.payload_context(payload_id)?;
+        let visibility =
+            self.rich_payload_visibility_for_workspace(&context.blip.workspace_name)?;
+        if visibility == RichPayloadVisibility::Hidden && context.payload.kind != PayloadKind::Text
+        {
+            return Err(PayloadAccessError::AccessDenied);
+        }
+
+        let blob_store = LocalBlobStore::new(self.blob_data_dir());
+        let summary = payload_summary(&context.payload, &blob_store, context.blip.is_redacted)?;
+        Ok(apply_payload_visibility(vec![summary], visibility)
+            .into_iter()
+            .next()
+            .expect("single payload summary should be preserved"))
+    }
+
+    fn payload_bytes_response(
+        &mut self,
+        payload_id: &str,
+        requester: PayloadRequester,
+        access: PayloadByteAccess,
+    ) -> Result<PayloadBytesResponse, PayloadAccessError> {
+        let context = self.payload_context(payload_id)?;
+        if let Err(error) = self.require_payload_byte_access(&context, requester, access) {
+            self.audit_payload_access(&context, requester, access, "denied")?;
+            return Err(error);
+        }
+
+        let blob_ref = match access {
+            PayloadByteAccess::Preview => match context.payload.preview_ref.as_deref() {
+                Some(preview_ref) => preview_ref,
+                None => {
+                    self.audit_payload_access(&context, requester, access, "denied")?;
+                    return Err(PayloadAccessError::UnsupportedPayload);
+                }
+            },
+            PayloadByteAccess::Raw => match context.payload.blob_ref.as_deref() {
+                Some(blob_ref) => blob_ref,
+                None => {
+                    self.audit_payload_access(&context, requester, access, "denied")?;
+                    return Err(PayloadAccessError::UnsupportedPayload);
+                }
+            },
+        };
+
+        let blob_store = LocalBlobStore::new(self.blob_data_dir());
+        let Some(blob_stat) = blob_store.stat(blob_ref)? else {
+            self.audit_payload_access(&context, requester, access, "missing_blob")?;
+            return Err(PayloadAccessError::MissingBlob);
+        };
+        if blob_stat.byte_size > MAX_PAYLOAD_EXPORT_BYTES {
+            self.audit_payload_access(&context, requester, access, "denied")?;
+            return Err(PayloadAccessError::PayloadTooLarge);
+        }
+        let bytes = blob_store.read(blob_ref)?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_PAYLOAD_EXPORT_BYTES {
+            self.audit_payload_access(&context, requester, access, "denied")?;
+            return Err(PayloadAccessError::PayloadTooLarge);
+        }
+        self.audit_payload_access(&context, requester, access, "allowed")?;
+
+        Ok(PayloadBytesResponse {
+            payload_id: context.payload.id.clone(),
+            blip_id: context.payload.blip_id.clone(),
+            workspace: context.blip.workspace_name.clone(),
+            payload_kind: context.payload.kind.as_str().to_owned(),
+            mime_type: payload_mime_type_for_access(&context.payload, access),
+            platform_format: context.payload.platform_format.clone(),
+            byte_size: i64::try_from(bytes.len())
+                .map_err(|_| PayloadAccessError::PayloadTooLarge)?,
+            bytes,
+        })
+    }
+
+    fn payload_context(&self, payload_id: &str) -> Result<PayloadContext, PayloadAccessError> {
+        let payload = self
+            .store
+            .get_payload(payload_id)?
+            .ok_or_else(|| PayloadAccessError::NotFound(payload_id.to_owned()))?;
+        let blip = self
+            .store
+            .get_blip(&payload.blip_id)?
+            .ok_or_else(|| PayloadAccessError::NotFound(payload.blip_id.clone()))?;
+        Ok(PayloadContext { payload, blip })
+    }
+
+    fn require_payload_byte_access(
+        &self,
+        context: &PayloadContext,
+        requester: PayloadRequester,
+        access: PayloadByteAccess,
+    ) -> Result<(), PayloadAccessError> {
+        match requester {
+            PayloadRequester::Agent => self
+                .store
+                .require_agent_raw_payload_access(&context.blip.workspace_name)
+                .map_err(|error| match error {
+                    BlipError::AgentAccessDenied(_) | BlipError::AgentRawPayloadAccessDenied(_) => {
+                        PayloadAccessError::AccessDenied
+                    }
+                    other => PayloadAccessError::Store(other),
+                }),
+            PayloadRequester::Cli | PayloadRequester::Desktop => {
+                let visibility =
+                    self.rich_payload_visibility_for_workspace(&context.blip.workspace_name)?;
+                match access {
+                    PayloadByteAccess::Preview
+                        if visibility != RichPayloadVisibility::SafePreview =>
+                    {
+                        Err(PayloadAccessError::AccessDenied)
+                    }
+                    PayloadByteAccess::Raw if visibility == RichPayloadVisibility::Hidden => {
+                        Err(PayloadAccessError::AccessDenied)
+                    }
+                    PayloadByteAccess::Raw => self
+                        .store
+                        .require_agent_raw_payload_access(&context.blip.workspace_name)
+                        .map_err(|error| match error {
+                            BlipError::AgentAccessDenied(_)
+                            | BlipError::AgentRawPayloadAccessDenied(_) => {
+                                PayloadAccessError::AccessDenied
+                            }
+                            other => PayloadAccessError::Store(other),
+                        }),
+                    PayloadByteAccess::Preview => Ok(()),
+                }
+            }
+        }
+    }
+
+    fn audit_payload_access(
+        &mut self,
+        context: &PayloadContext,
+        requester: PayloadRequester,
+        access: PayloadByteAccess,
+        decision: &str,
+    ) -> Result<(), PayloadAccessError> {
+        let event_type = match (requester, access) {
+            (_, PayloadByteAccess::Preview) => AuditEventType::PayloadPreviewRead,
+            (PayloadRequester::Agent, PayloadByteAccess::Raw) => AuditEventType::AgentPayloadRead,
+            (PayloadRequester::Cli | PayloadRequester::Desktop, PayloadByteAccess::Raw) => {
+                AuditEventType::PayloadRawExported
+            }
+        };
+        let actor_type = match requester {
+            PayloadRequester::Agent => ActorType::Agent,
+            PayloadRequester::Cli | PayloadRequester::Desktop => ActorType::User,
+        };
+        self.store
+            .record_payload_access_event(&PayloadAccessAudit {
+                actor_type,
+                actor_id: Some(requester.as_str().to_owned()),
+                event_type,
+                target_blip_id: Some(context.blip.id.clone()),
+                target_workspace: Some(context.blip.workspace_name.clone()),
+                payload_id: context.payload.id.clone(),
+                payload_kind: context.payload.kind,
+                access_mode: access.as_str().to_owned(),
+                decision: decision.to_owned(),
+            })
+            .map_err(PayloadAccessError::Store)
+    }
+
     fn workspace_summary(
         &self,
         workspace: blip_core::Workspace,
@@ -973,6 +1186,61 @@ where
             .get_workspace_policy(workspace_name)?
             .unwrap_or_else(|| WorkspacePolicy::default_for_workspace(workspace_name));
         Ok(policy.rich_payload_visibility)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PayloadContext {
+    payload: blip_core::ClipboardPayload,
+    blip: Blip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PayloadByteAccess {
+    Preview,
+    Raw,
+}
+
+impl PayloadByteAccess {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Preview => "preview",
+            Self::Raw => "raw_export",
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+enum PayloadAccessError {
+    #[error("payload `{0}` does not exist")]
+    NotFound(String),
+    #[error("payload access denied by workspace policy")]
+    AccessDenied,
+    #[error("payload backing blob is missing")]
+    MissingBlob,
+    #[error("payload does not have retrievable bytes for this operation")]
+    UnsupportedPayload,
+    #[error("payload export exceeds daemon export limit")]
+    PayloadTooLarge,
+    #[error(transparent)]
+    Store(#[from] BlipError),
+}
+
+fn payload_mime_type_for_access(
+    payload: &blip_core::ClipboardPayload,
+    access: PayloadByteAccess,
+) -> Option<String> {
+    match access {
+        PayloadByteAccess::Preview => payload
+            .metadata
+            .get("preview")
+            .and_then(|preview| preview.get("mime_type"))
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(
+                || payload.mime_type.clone(),
+                |mime_type| Some(mime_type.to_owned()),
+            ),
+        PayloadByteAccess::Raw => payload.mime_type.clone(),
     }
 }
 
@@ -1616,6 +1884,47 @@ fn agent_read_error_response(
             DaemonApiError::new(DaemonApiErrorCode::StoreUnavailable, error.to_string()),
         ),
     }
+}
+
+fn payload_access_error_response(
+    request_id: String,
+    command: DaemonCommand,
+    error: PayloadAccessError,
+) -> DaemonResponse {
+    let (code, message) = match error {
+        PayloadAccessError::NotFound(id) => (
+            DaemonApiErrorCode::NotFound,
+            format!("payload `{id}` does not exist"),
+        ),
+        PayloadAccessError::AccessDenied => (
+            DaemonApiErrorCode::AccessDenied,
+            "payload access denied by workspace policy".to_owned(),
+        ),
+        PayloadAccessError::MissingBlob => (
+            DaemonApiErrorCode::MissingBlob,
+            "payload backing blob is missing".to_owned(),
+        ),
+        PayloadAccessError::UnsupportedPayload => (
+            DaemonApiErrorCode::UnsupportedPayload,
+            "payload does not have retrievable bytes for this operation".to_owned(),
+        ),
+        PayloadAccessError::PayloadTooLarge => (
+            DaemonApiErrorCode::PayloadTooLarge,
+            "payload export exceeds daemon export limit".to_owned(),
+        ),
+        PayloadAccessError::Store(error) => {
+            if matches!(error, BlipError::BlobIntegrityMismatch(_)) {
+                (
+                    DaemonApiErrorCode::StoreUnavailable,
+                    "payload blob integrity check failed".to_owned(),
+                )
+            } else {
+                (DaemonApiErrorCode::StoreUnavailable, error.to_string())
+            }
+        }
+    };
+
+    DaemonResponse::error(request_id, command, DaemonApiError::new(code, message))
 }
 
 fn search_error_response(
@@ -2793,6 +3102,468 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_exports_payload_bytes_and_audits_raw_export() {
+        let root = unique_temp_dir("blipcoard-export-payload");
+        std::fs::create_dir_all(&root).expect("temp root should create");
+        let db_path = root.join("blipcoard.db");
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&blip_core::NewWorkspace {
+                name: "agent-feed".to_owned(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should create");
+        store
+            .set_workspace_policy(&WorkspacePolicy {
+                workspace_name: "agent-feed".to_owned(),
+                rich_capture_enabled: true,
+                image_capture_enabled: true,
+                rich_payload_visibility: RichPayloadVisibility::SafePreview,
+                agent_raw_payload_access: true,
+            })
+            .expect("policy should update");
+        let blip =
+            insert_payload_test_blip_in_workspace(&mut store, "agent-feed", "exportable image");
+        let blob_store = LocalBlobStore::new(&root);
+        let payload = store
+            .insert_blob_payload(
+                &blip.id,
+                &NewClipboardPayload {
+                    kind: PayloadKind::Image,
+                    mime_type: Some("image/png".to_owned()),
+                    platform_format: Some("public.png".to_owned()),
+                    source_app: None,
+                    preview_ref: None,
+                    inline_text: None,
+                    metadata: serde_json::json!({"width": 1, "height": 1}),
+                    bytes: b"raw image bytes".to_vec(),
+                },
+                &blob_store,
+            )
+            .expect("payload should insert");
+        let mut runtime = DaemonRuntime::new(
+            &db_path,
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "export-payload",
+            DaemonCommand::ExportPayload,
+            DaemonRequestPayload::ExportPayload {
+                payload_id: payload.id.clone(),
+                requester: PayloadRequester::Cli,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        match response.payload {
+            Some(DaemonResponsePayload::PayloadBytes(bytes)) => {
+                assert_eq!(bytes.payload_id, payload.id);
+                assert_eq!(bytes.bytes, b"raw image bytes");
+                assert_eq!(bytes.mime_type.as_deref(), Some("image/png"));
+            }
+            other => panic!("expected payload bytes, got {other:?}"),
+        }
+        assert!(
+            runtime
+                .store
+                .list_audit_events()
+                .expect("audit should list")
+                .iter()
+                .any(|event| {
+                    event.event_type == AuditEventType::PayloadRawExported
+                        && event
+                            .details_json
+                            .as_deref()
+                            .is_some_and(|details| details.contains("\"decision\":\"allowed\""))
+                })
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dispatch_denies_raw_payload_export_without_raw_workspace_grant() {
+        let root = unique_temp_dir("blipcoard-export-policy-denied");
+        std::fs::create_dir_all(&root).expect("temp root should create");
+        let db_path = root.join("blipcoard.db");
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&blip_core::NewWorkspace {
+                name: "agent-feed".to_owned(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should create");
+        let blip = insert_payload_test_blip_in_workspace(&mut store, "agent-feed", "private image");
+        let blob_store = LocalBlobStore::new(&root);
+        let payload = store
+            .insert_blob_payload(
+                &blip.id,
+                &image_export_payload(b"private bytes"),
+                &blob_store,
+            )
+            .expect("payload should insert");
+        let mut runtime = DaemonRuntime::new(
+            &db_path,
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "cli-spoof-export-denied",
+            DaemonCommand::ExportPayload,
+            DaemonRequestPayload::ExportPayload {
+                payload_id: payload.id,
+                requester: PayloadRequester::Cli,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Error);
+        assert_eq!(
+            response.error.map(|error| error.code),
+            Some(DaemonApiErrorCode::AccessDenied)
+        );
+        assert!(
+            runtime
+                .store
+                .list_audit_events()
+                .expect("audit should list")
+                .iter()
+                .any(
+                    |event| event.event_type == AuditEventType::PayloadRawExported
+                        && event
+                            .details_json
+                            .as_deref()
+                            .is_some_and(|details| details.contains("\"decision\":\"denied\""))
+                )
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dispatch_reads_payload_preview_and_audits_preview_read() {
+        let root = unique_temp_dir("blipcoard-preview-payload");
+        std::fs::create_dir_all(&root).expect("temp root should create");
+        let db_path = root.join("blipcoard.db");
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let blip = insert_payload_test_blip(&mut store, "previewable image");
+        let blob_store = LocalBlobStore::new(&root);
+        let preview = blob_store
+            .write(b"preview bytes")
+            .expect("preview should write");
+        let payload = store
+            .insert_blob_payload(
+                &blip.id,
+                &NewClipboardPayload {
+                    kind: PayloadKind::Image,
+                    mime_type: Some("image/png".to_owned()),
+                    platform_format: Some("public.png".to_owned()),
+                    source_app: None,
+                    preview_ref: Some(preview.blob_ref),
+                    inline_text: None,
+                    metadata: serde_json::json!({
+                        "width": 1,
+                        "height": 1,
+                        "preview": {"mime_type": "image/png"},
+                    }),
+                    bytes: b"raw image bytes".to_vec(),
+                },
+                &blob_store,
+            )
+            .expect("payload should insert");
+        let mut runtime = DaemonRuntime::new(
+            &db_path,
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "preview-payload",
+            DaemonCommand::GetPayloadPreview,
+            DaemonRequestPayload::GetPayloadPreview {
+                payload_id: payload.id.clone(),
+                requester: PayloadRequester::Desktop,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        match response.payload {
+            Some(DaemonResponsePayload::PayloadBytes(bytes)) => {
+                assert_eq!(bytes.bytes, b"preview bytes");
+                assert_eq!(bytes.mime_type.as_deref(), Some("image/png"));
+            }
+            other => panic!("expected payload preview bytes, got {other:?}"),
+        }
+        assert!(
+            runtime
+                .store
+                .list_audit_events()
+                .expect("audit should list")
+                .iter()
+                .any(|event| event.event_type == AuditEventType::PayloadPreviewRead)
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dispatch_denies_agent_raw_payload_export_by_default_and_audits() {
+        let root = unique_temp_dir("blipcoard-agent-denied-payload");
+        std::fs::create_dir_all(&root).expect("temp root should create");
+        let db_path = root.join("blipcoard.db");
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&blip_core::NewWorkspace {
+                name: "agent-feed".to_owned(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should create");
+        let blip = store
+            .insert_blip(&NewBlip {
+                workspace_name: "agent-feed".to_owned(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "agent image".to_owned(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: vec!["rich:clipboard".to_owned()],
+            })
+            .expect("blip should insert");
+        let blob_store = LocalBlobStore::new(&root);
+        let payload = store
+            .insert_blob_payload(&blip.id, &image_export_payload(b"agent bytes"), &blob_store)
+            .expect("payload should insert");
+        let mut runtime = DaemonRuntime::new(
+            &db_path,
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "agent-export-denied",
+            DaemonCommand::ExportPayload,
+            DaemonRequestPayload::ExportPayload {
+                payload_id: payload.id,
+                requester: PayloadRequester::Agent,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Error);
+        assert_eq!(
+            response.error.map(|error| error.code),
+            Some(DaemonApiErrorCode::AccessDenied)
+        );
+        assert!(
+            runtime
+                .store
+                .list_audit_events()
+                .expect("audit should list")
+                .iter()
+                .any(|event| event.event_type == AuditEventType::AgentPayloadRead
+                    && event
+                        .details_json
+                        .as_deref()
+                        .is_some_and(|details| details.contains("\"decision\":\"denied\"")))
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dispatch_denies_raw_payload_export_by_policy_before_size_limit() {
+        let root = unique_temp_dir("blipcoard-export-policy-before-size");
+        std::fs::create_dir_all(&root).expect("temp root should create");
+        let db_path = root.join("blipcoard.db");
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&blip_core::NewWorkspace {
+                name: "agent-feed".to_owned(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should create");
+        let blip = insert_payload_test_blip_in_workspace(&mut store, "agent-feed", "large image");
+        let blob_store = LocalBlobStore::new(&root);
+        let payload = store
+            .insert_blob_payload(&blip.id, &image_export_payload(b"large image"), &blob_store)
+            .expect("payload should insert");
+        let oversized_blob_path = blob_store
+            .root()
+            .join(payload.blob_ref.as_deref().expect("blob ref"));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(oversized_blob_path)
+            .expect("blob should open")
+            .set_len(MAX_PAYLOAD_EXPORT_BYTES + 1)
+            .expect("blob should become oversized");
+        let mut runtime = DaemonRuntime::new(
+            &db_path,
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "policy-before-size",
+            DaemonCommand::ExportPayload,
+            DaemonRequestPayload::ExportPayload {
+                payload_id: payload.id,
+                requester: PayloadRequester::Cli,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Error);
+        assert_eq!(
+            response.error.map(|error| error.code),
+            Some(DaemonApiErrorCode::AccessDenied)
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dispatch_returns_typed_errors_for_unsupported_and_missing_payload_blobs() {
+        let root = unique_temp_dir("blipcoard-payload-errors");
+        std::fs::create_dir_all(&root).expect("temp root should create");
+        let db_path = root.join("blipcoard.db");
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&blip_core::NewWorkspace {
+                name: "agent-feed".to_owned(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should create");
+        store
+            .set_workspace_policy(&WorkspacePolicy {
+                workspace_name: "agent-feed".to_owned(),
+                rich_capture_enabled: true,
+                image_capture_enabled: true,
+                rich_payload_visibility: RichPayloadVisibility::SafePreview,
+                agent_raw_payload_access: true,
+            })
+            .expect("policy should update");
+        let blip = insert_payload_test_blip_in_workspace(&mut store, "agent-feed", "file refs");
+        let file_payload = store
+            .insert_metadata_payload(
+                &blip.id,
+                &NewClipboardMetadataPayload {
+                    kind: PayloadKind::FileList,
+                    mime_type: Some("text/uri-list".to_owned()),
+                    platform_format: None,
+                    source_app: None,
+                    preview_ref: None,
+                    inline_text: None,
+                    metadata: serde_json::json!({"policy": "metadata_only", "path_count": 1}),
+                    byte_size: 10,
+                },
+            )
+            .expect("metadata payload should insert");
+        let blob_store = LocalBlobStore::new(&root);
+        let missing_payload = store
+            .insert_blob_payload(
+                &blip.id,
+                &image_export_payload(b"missing bytes"),
+                &blob_store,
+            )
+            .expect("payload should insert");
+        blob_store
+            .delete(missing_payload.blob_ref.as_deref().expect("blob ref"))
+            .expect("blob should delete");
+        let mut runtime = DaemonRuntime::new(
+            &db_path,
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let unsupported = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "unsupported-export",
+            DaemonCommand::ExportPayload,
+            DaemonRequestPayload::ExportPayload {
+                payload_id: file_payload.id,
+                requester: PayloadRequester::Cli,
+            },
+        ));
+        assert_eq!(unsupported.status, blip_api::DaemonResponseStatus::Error);
+        assert_eq!(
+            unsupported.error.map(|error| error.code),
+            Some(DaemonApiErrorCode::UnsupportedPayload)
+        );
+
+        let missing = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "missing-export",
+            DaemonCommand::ExportPayload,
+            DaemonRequestPayload::ExportPayload {
+                payload_id: missing_payload.id,
+                requester: PayloadRequester::Cli,
+            },
+        ));
+        assert_eq!(missing.status, blip_api::DaemonResponseStatus::Error);
+        assert_eq!(
+            missing.error.map(|error| error.code),
+            Some(DaemonApiErrorCode::MissingBlob)
+        );
+        let audit_events = runtime
+            .store
+            .list_audit_events()
+            .expect("audit should list");
+        assert!(audit_events.iter().any(|event| {
+            event.event_type == AuditEventType::PayloadRawExported
+                && event
+                    .details_json
+                    .as_deref()
+                    .is_some_and(|details| details.contains("\"decision\":\"denied\""))
+        }));
+        assert!(audit_events.iter().any(|event| {
+            event.event_type == AuditEventType::PayloadRawExported
+                && event
+                    .details_json
+                    .as_deref()
+                    .is_some_and(|details| details.contains("\"decision\":\"missing_blob\""))
+        }));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn clipboard_source_maps_watcher_events_to_runtime_events() {
         let watcher = ScriptedClipboardWatcher {
             events: vec![Some(ClipboardEvent::text("copied text"))],
@@ -3623,6 +4394,42 @@ mod tests {
             })
             .expect("workspace should be created");
         store
+    }
+
+    fn insert_payload_test_blip(store: &mut BlipStore, content: &str) -> Blip {
+        insert_payload_test_blip_in_workspace(store, "inbox", content)
+    }
+
+    fn insert_payload_test_blip_in_workspace(
+        store: &mut BlipStore,
+        workspace: &str,
+        content: &str,
+    ) -> Blip {
+        store
+            .insert_blip(&NewBlip {
+                workspace_name: workspace.to_owned(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: content.to_owned(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: vec!["rich:clipboard".to_owned()],
+            })
+            .expect("blip should insert")
+    }
+
+    fn image_export_payload(bytes: &[u8]) -> NewClipboardPayload {
+        NewClipboardPayload {
+            kind: PayloadKind::Image,
+            mime_type: Some("image/png".to_owned()),
+            platform_format: Some("public.png".to_owned()),
+            source_app: None,
+            preview_ref: None,
+            inline_text: None,
+            metadata: serde_json::json!({"width": 1, "height": 1}),
+            bytes: bytes.to_vec(),
+        }
     }
 
     fn sample_clipboard_image() -> ClipboardImage {

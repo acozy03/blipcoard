@@ -3,7 +3,8 @@ use blip_api::{
     BlipListResponse, BlipRoutedResponse, CurrentWorkspaceResponse, DAEMON_API_VERSION,
     DaemonApiError, DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse,
     DaemonResponsePayload, DaemonResponseStatus, DaemonVersionResponse, HealthResponse,
-    WorkspaceListResponse, WorkspaceSummary,
+    PayloadBytesResponse, PayloadRequester, PayloadSummary, WorkspaceListResponse,
+    WorkspaceSummary,
 };
 use blip_config::{BlipConfig, ConfigError};
 use std::error::Error;
@@ -201,6 +202,70 @@ impl DaemonClient {
             Some(DaemonResponsePayload::Blip(blip)) => Ok(blip),
             other => Err(DaemonClientError::UnexpectedPayload {
                 command: DaemonCommand::GetBlip,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn payload_metadata(&self, payload_id: &str) -> Result<PayloadSummary, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("payload-metadata"),
+            DaemonCommand::GetPayloadMetadata,
+            DaemonRequestPayload::GetPayloadMetadata {
+                payload_id: payload_id.to_owned(),
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::PayloadMetadata(payload)) => Ok(payload),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::GetPayloadMetadata,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn payload_preview(
+        &self,
+        payload_id: &str,
+        requester: PayloadRequester,
+    ) -> Result<PayloadBytesResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("payload-preview"),
+            DaemonCommand::GetPayloadPreview,
+            DaemonRequestPayload::GetPayloadPreview {
+                payload_id: payload_id.to_owned(),
+                requester,
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::PayloadBytes(payload)) => Ok(payload),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::GetPayloadPreview,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn export_payload(
+        &self,
+        payload_id: &str,
+        requester: PayloadRequester,
+    ) -> Result<PayloadBytesResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("payload-export"),
+            DaemonCommand::ExportPayload,
+            DaemonRequestPayload::ExportPayload {
+                payload_id: payload_id.to_owned(),
+                requester,
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::PayloadBytes(payload)) => Ok(payload),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::ExportPayload,
                 payload: payload_name(other.as_ref()),
             }),
         }
@@ -465,6 +530,8 @@ fn payload_name(payload: Option<&DaemonResponsePayload>) -> &'static str {
         Some(DaemonResponsePayload::Workspaces(_)) => "workspaces",
         Some(DaemonResponsePayload::Blips(_)) => "blips",
         Some(DaemonResponsePayload::Blip(_)) => "blip",
+        Some(DaemonResponsePayload::PayloadMetadata(_)) => "payload_metadata",
+        Some(DaemonResponsePayload::PayloadBytes(_)) => "payload_bytes",
         Some(DaemonResponsePayload::AuditEvents(_)) => "audit_events",
         Some(DaemonResponsePayload::AgentBlips(_)) => "agent_blips",
         Some(DaemonResponsePayload::AgentBundle(_)) => "agent_bundle",
@@ -480,6 +547,9 @@ fn error_code_name(code: blip_api::DaemonApiErrorCode) -> &'static str {
         blip_api::DaemonApiErrorCode::NotFound => "not_found",
         blip_api::DaemonApiErrorCode::AccessDenied => "access_denied",
         blip_api::DaemonApiErrorCode::StoreUnavailable => "store_unavailable",
+        blip_api::DaemonApiErrorCode::MissingBlob => "missing_blob",
+        blip_api::DaemonApiErrorCode::UnsupportedPayload => "unsupported_payload",
+        blip_api::DaemonApiErrorCode::PayloadTooLarge => "payload_too_large",
         blip_api::DaemonApiErrorCode::Internal => "internal",
     }
 }

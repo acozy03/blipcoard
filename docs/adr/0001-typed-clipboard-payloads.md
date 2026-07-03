@@ -219,6 +219,15 @@ separate from the full payload `blob_ref`. Garbage collection and delete logic
 must treat both references as live blob references. List views may use payload
 metadata and preview states, but they must not load raw payload bytes by default.
 
+Phase 8.7 adds explicit daemon-mediated payload byte retrieval. Clients request
+metadata, preview bytes, or raw bytes by payload id; list and detail responses
+remain summary-only. Preview reads, raw exports, and agent raw reads all pass
+through the same workspace policy checks and emit dedicated payload access audit
+events. Raw exports require the explicit raw-payload workspace grant; the daemon
+does not treat client-supplied requester labels as authorization. The CLI writes
+exported bytes only to an explicitly requested path and does not overwrite an
+existing file unless the user passes `--force`.
+
 ## Consequences
 
 This keeps Phase 8 incremental. Search, summaries, agent bundles, and current

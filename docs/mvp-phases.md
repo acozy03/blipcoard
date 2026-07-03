@@ -222,6 +222,19 @@ Phase 8.5 safe preview behavior:
 - missing or deleted backing blobs are inspection states, not panics or silent
   text-only downgrades
 
+Phase 8.7 daemon export behavior:
+
+- daemon API exposes explicit payload-id commands for metadata inspection, safe
+  preview byte retrieval, and raw payload export
+- desktop and CLI clients use the same daemon commands for rich payload bytes
+  instead of reading SQLite rows or blob files directly
+- CLI export writes bytes only to the requested path and refuses to overwrite an
+  existing file unless `--force` is provided
+- raw exports require the explicit raw-payload workspace grant instead of
+  trusting a client-supplied requester label
+- denied access, missing blobs, unsupported payloads, and oversized exports are
+  returned as typed daemon errors
+
 Out of scope:
 
 - optical character recognition as an ingestion requirement

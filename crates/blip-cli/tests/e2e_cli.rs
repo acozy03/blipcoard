@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use blip_core::{BlipStore, LocalBlobStore, NewClipboardPayload, PayloadKind};
 use predicates::prelude::*;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
@@ -513,6 +514,175 @@ fn cli_summarizes_rich_payloads_without_binary_output() {
         .expect("file-list payload summary should be present");
     assert_eq!(payload["preview_state"], "metadata_only");
     assert!(payload.get("blob_ref").is_none());
+
+    stop_daemon(&mut daemon);
+}
+
+#[test]
+fn cli_inspects_and_exports_rich_payload_bytes_safely() {
+    let temp = tempdir().expect("tempdir should exist");
+    let db_path = temp.path().join("blipcoard-test.db");
+    let socket_path = temp.path().join("blipcoard.sock");
+
+    blip_command(&db_path)
+        .args(["create", "payload-lab", "--agent-access"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("created workspace payload-lab"));
+
+    blip_command(&db_path)
+        .args(["add-demo", "payload-lab", "Image clipboard payload: test"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("created blip"));
+
+    let blip_id = Connection::open(&db_path)
+        .expect("database should open")
+        .query_row(
+            "SELECT id FROM blips WHERE content = ?1",
+            ["Image clipboard payload: test"],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("seed blip should exist");
+    let mut store = BlipStore::open(&db_path).expect("store should open");
+    let blob_store = LocalBlobStore::new(temp.path());
+    let preview = blob_store
+        .write(b"preview bytes")
+        .expect("preview should write");
+    let payload = store
+        .insert_blob_payload(
+            &blip_id,
+            &NewClipboardPayload {
+                kind: PayloadKind::Image,
+                mime_type: Some("image/png".to_owned()),
+                platform_format: Some("public.png".to_owned()),
+                source_app: None,
+                preview_ref: Some(preview.blob_ref),
+                inline_text: None,
+                metadata: serde_json::json!({
+                    "width": 1,
+                    "height": 1,
+                    "preview": {"mime_type": "image/png"},
+                }),
+                bytes: b"export bytes".to_vec(),
+            },
+            &blob_store,
+        )
+        .expect("payload should insert");
+
+    let mut daemon = blip_daemon_command(&db_path, &socket_path)
+        .spawn()
+        .expect("daemon should start");
+    wait_for_socket(&socket_path);
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args([
+            "policy",
+            "payload-lab",
+            "--agent-raw-payload-access",
+            "true",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains("agent raw payload access: true"));
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["payload", "inspect", &payload.id])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains(format!("payload: {}", payload.id)))
+        .stdout(predicate::str::contains("kind: image"))
+        .stdout(predicate::str::contains("has blob: true"));
+
+    let preview_path = temp.path().join("payload-preview.bin");
+    blip_command_with_socket(&db_path, &socket_path)
+        .args([
+            "payload",
+            "preview",
+            &payload.id,
+            preview_path.to_str().expect("path should be utf8"),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains("exported payload"));
+    assert_eq!(
+        std::fs::read(&preview_path).expect("preview file should read"),
+        b"preview bytes"
+    );
+
+    let export_path = temp.path().join("payload.bin");
+    blip_command_with_socket(&db_path, &socket_path)
+        .args([
+            "payload",
+            "export",
+            &payload.id,
+            export_path.to_str().expect("path should be utf8"),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains("exported payload"));
+    assert_eq!(
+        std::fs::read(&export_path).expect("exported file should read"),
+        b"export bytes"
+    );
+
+    std::fs::write(&export_path, b"existing").expect("existing file should write");
+    blip_command_with_socket(&db_path, &socket_path)
+        .args([
+            "payload",
+            "export",
+            &payload.id,
+            export_path.to_str().expect("path should be utf8"),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "refusing to overwrite existing file",
+        ));
+    assert_eq!(
+        std::fs::read(&export_path).expect("existing file should read"),
+        b"existing"
+    );
+
+    let json_path = temp.path().join("payload-json.bin");
+    let exported = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &[
+            "payload",
+            "export",
+            &payload.id,
+            json_path.to_str().expect("path should be utf8"),
+            "--output",
+            "json",
+        ],
+    );
+    assert_eq!(exported["payload_id"], payload.id);
+    assert_eq!(exported["byte_size"], 12);
+    assert_eq!(
+        std::fs::read(&json_path).expect("json export file should read"),
+        b"export bytes"
+    );
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args([
+            "payload",
+            "export",
+            &payload.id,
+            export_path.to_str().expect("path should be utf8"),
+            "--force",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    assert_eq!(
+        std::fs::read(&export_path).expect("forced file should read"),
+        b"export bytes"
+    );
 
     stop_daemon(&mut daemon);
 }
