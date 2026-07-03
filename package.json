@@ -11,11 +11,13 @@
     "web:preview": "npm --prefix apps/web run preview",
     "setup": "./scripts/setup-dev.sh",
     "hooks:install": "./scripts/setup-git-hooks.sh",
+    "docs:check-search": "node scripts/check-docs-search.js",
     "lint:pr-title": "commitlint",
     "lint:commits": "commitlint"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.1.0",
-    "@commitlint/config-conventional": "^20.0.0"
+    "@commitlint/config-conventional": "^20.0.0",
+    "@playwright/test": "^1.61.1"
   }
 }
