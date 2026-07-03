@@ -252,6 +252,9 @@ Common fixes:
 | CLI and daemon disagree after upgrade | Install matching `blip` and `blipd` binaries from the same release, then restart the daemon. |
 | Capture is unexpectedly quiet | Check `[capture]` settings in `config.toml` and confirm the active workspace with `blip current`. |
 
+Upgrade and migration guidance lives in
+[`upgrade-migrations.md`](upgrade-migrations.md).
+
 Uninstall the user service without deleting data:
 
 ```sh

@@ -143,6 +143,8 @@ Planned smoke checks after Windows IPC lands:
 - Confirm `blip service status` and `blip service logs` report the expected
   platform service/log details.
 - Confirm the CLI uses the same config and store as the desktop app.
+- For releases with schema, blob, daemon API, or service startup changes, run
+  the migration checklist in [`upgrade-migrations.md`](upgrade-migrations.md).
 - Confirm uninstall behavior preserves config, SQLite, and `blobs/` by default.
 - Record platform, architecture, package format, signing state, and smoke-check
   result in release notes.

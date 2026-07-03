@@ -18,6 +18,8 @@ Start with the design docs in [docs/architecture.md](./docs/architecture.md),
 requirements live in [docs/desktop-bundles.md](./docs/desktop-bundles.md).
 CLI-only install and operations guidance lives in
 [docs/cli-operations.md](./docs/cli-operations.md).
+Upgrade and migration guidance lives in
+[docs/upgrade-migrations.md](./docs/upgrade-migrations.md).
 
 ## Current Status
 

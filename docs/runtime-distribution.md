@@ -22,6 +22,8 @@ engines.
 
 CLI-only install and operations details live in
 [`cli-operations.md`](cli-operations.md).
+Upgrade and migration details live in
+[`upgrade-migrations.md`](upgrade-migrations.md).
 
 ## Component Ownership
 
@@ -174,5 +176,6 @@ blob, and log data. Purge must never be the default uninstall behavior.
 - Phase 9.3 implements macOS and Linux service startup and documents concrete
   log locations. Windows remains blocked by the Windows IPC follow-up.
 - Phase 9.4 documents CLI-only install and operations in `cli-operations.md`.
-- Phase 9.5 should define backup, upgrade, and migration checks around the
-  config, SQLite database, and blob directory.
+- Phase 9.5 documents backup, upgrade, and migration checks around the config,
+  SQLite database, blob directory, and daemon API compatibility in
+  `upgrade-migrations.md`.
