@@ -2,8 +2,8 @@ use crate::LocalBlobStore;
 use crate::domain::{
     ActorType, AuditEvent, AuditEventType, Blip, BlipMove, BlipSummary, ClipboardPayload,
     ClipboardPayloadSummary, ContentType, NewBlip, NewClipboardMetadataPayload,
-    NewClipboardPayload, NewWorkspace, PayloadAccessAudit, PayloadKind, RichPayloadVisibility,
-    Workspace, WorkspacePolicy,
+    NewClipboardPayload, NewWorkspace, PayloadAccessAudit, PayloadKind, RetentionCleanupReport,
+    RichPayloadVisibility, Workspace, WorkspacePolicy,
 };
 use crate::error::{BlipError, is_sqlite_busy_error};
 use crate::secrets::add_secret_tags;
@@ -690,6 +690,32 @@ impl BlipStore {
         })
     }
 
+    pub fn delete_expired_blips_and_collect_orphans(
+        &mut self,
+        blob_store: &LocalBlobStore,
+        now: DateTime<Utc>,
+    ) -> Result<RetentionCleanupReport, BlipError> {
+        blob_store.with_lock(|| {
+            let (deleted_blips, expired_blob_refs) =
+                self.delete_expired_blips_and_return_blob_refs(now)?;
+            let mut removed_blob_refs = Vec::new();
+
+            for blob_ref in expired_blob_refs {
+                if !self.is_blob_ref_referenced(&blob_ref)?
+                    && blob_store.delete_unlocked(&blob_ref)?
+                {
+                    removed_blob_refs.push(blob_ref);
+                }
+            }
+            removed_blob_refs.sort();
+
+            Ok(RetentionCleanupReport {
+                deleted_blips,
+                removed_blob_refs,
+            })
+        })
+    }
+
     pub fn garbage_collect_blobs(
         &self,
         blob_store: &LocalBlobStore,
@@ -804,6 +830,59 @@ impl BlipStore {
         tx.execute("DELETE FROM blips WHERE id = ?1", [blip_id])?;
         tx.commit()?;
         Ok(blob_refs)
+    }
+
+    fn delete_expired_blips_and_return_blob_refs(
+        &mut self,
+        now: DateTime<Utc>,
+    ) -> Result<(usize, HashSet<String>), BlipError> {
+        self.with_busy_retry(|store| store.delete_expired_blips_and_return_blob_refs_once(now))
+    }
+
+    fn delete_expired_blips_and_return_blob_refs_once(
+        &mut self,
+        now: DateTime<Utc>,
+    ) -> Result<(usize, HashSet<String>), BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        let retention_workspaces = {
+            let mut stmt = tx.prepare(
+                "SELECT name, retention_days
+                 FROM workspaces
+                 WHERE retention_days IS NOT NULL AND retention_days >= 0",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        let mut expired_blip_ids = Vec::new();
+        for (workspace, retention_days) in retention_workspaces {
+            let cutoff = now - chrono::Duration::days(retention_days);
+            let mut stmt = tx.prepare(
+                "SELECT id
+                 FROM blips
+                 WHERE workspace_name = ?1 AND created_at < ?2",
+            )?;
+            let rows = stmt.query_map(params![workspace, cutoff], |row| row.get::<_, String>(0))?;
+            expired_blip_ids.extend(rows.collect::<Result<Vec<_>, _>>()?);
+        }
+
+        let mut blob_refs = HashSet::new();
+        for blip_id in &expired_blip_ids {
+            blob_refs.extend(Self::referenced_blob_refs_for_blip_from(&tx, blip_id)?);
+        }
+
+        for blip_id in &expired_blip_ids {
+            tx.execute("DELETE FROM blips WHERE id = ?1", [blip_id])?;
+        }
+
+        let deleted_blips = expired_blip_ids.len();
+        tx.commit()?;
+        Ok((deleted_blips, blob_refs))
     }
 
     fn is_blob_ref_referenced(&self, blob_ref: &str) -> Result<bool, BlipError> {
@@ -2313,6 +2392,146 @@ mod tests {
     }
 
     #[test]
+    fn retention_cleanup_deletes_expired_blips_and_only_unreferenced_blobs() {
+        let root = temp_blob_root("store-retention-cleanup");
+        let blob_store = LocalBlobStore::with_max_blob_bytes(&root, 4096);
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&NewWorkspace {
+                name: "retained".to_owned(),
+                description: None,
+                color: None,
+                agent_access: false,
+                sticky_capture: false,
+                retention_days: Some(1),
+            })
+            .expect("workspace should create");
+
+        let expired_unique =
+            insert_test_blip_in_workspace(&mut store, "retained", "expired unique");
+        let expired_shared =
+            insert_test_blip_in_workspace(&mut store, "retained", "expired shared");
+        let fresh_shared = insert_test_blip_in_workspace(&mut store, "retained", "fresh shared");
+        let fresh_unique = insert_test_blip_in_workspace(&mut store, "retained", "fresh unique");
+
+        let expired_preview = blob_store
+            .write(b"expired preview")
+            .expect("preview should write");
+        let mut expired_unique_payload = image_payload(b"expired unique bytes");
+        expired_unique_payload.preview_ref = Some(expired_preview.blob_ref.clone());
+        let expired_unique_payload = store
+            .insert_blob_payload(&expired_unique.id, &expired_unique_payload, &blob_store)
+            .expect("expired unique payload should insert");
+        let expired_unique_ref = expired_unique_payload
+            .blob_ref
+            .clone()
+            .expect("expired unique payload should have blob ref");
+
+        let expired_shared_payload = store
+            .insert_blob_payload(
+                &expired_shared.id,
+                &image_payload(b"shared retention bytes"),
+                &blob_store,
+            )
+            .expect("expired shared payload should insert");
+        let shared_ref = expired_shared_payload
+            .blob_ref
+            .clone()
+            .expect("shared payload should have blob ref");
+        let fresh_shared_payload = store
+            .insert_blob_payload(
+                &fresh_shared.id,
+                &image_payload(b"shared retention bytes"),
+                &blob_store,
+            )
+            .expect("fresh shared payload should insert");
+        assert_eq!(
+            fresh_shared_payload.blob_ref.as_deref(),
+            Some(shared_ref.as_str())
+        );
+        let fresh_unique_payload = store
+            .insert_blob_payload(
+                &fresh_unique.id,
+                &image_payload(b"fresh unique bytes"),
+                &blob_store,
+            )
+            .expect("fresh unique payload should insert");
+        let fresh_unique_ref = fresh_unique_payload
+            .blob_ref
+            .clone()
+            .expect("fresh unique payload should have blob ref");
+
+        let now = Utc::now();
+        let expired_at = now - chrono::Duration::days(2);
+        store
+            .connection()
+            .execute(
+                "UPDATE blips SET created_at = ?1 WHERE id IN (?2, ?3)",
+                params![expired_at, expired_unique.id, expired_shared.id],
+            )
+            .expect("expired blips should update");
+
+        let report = store
+            .delete_expired_blips_and_collect_orphans(&blob_store, now)
+            .expect("retention cleanup should run");
+
+        assert_eq!(report.deleted_blips, 2);
+        assert_eq!(
+            report.removed_blob_refs,
+            vec![expired_preview.blob_ref.clone(), expired_unique_ref.clone()]
+        );
+        assert!(!blob_store.exists(&expired_unique_ref).expect("blob stat"));
+        assert!(
+            !blob_store
+                .exists(&expired_preview.blob_ref)
+                .expect("preview stat")
+        );
+        assert!(blob_store.exists(&shared_ref).expect("shared blob stat"));
+        assert!(
+            blob_store
+                .exists(&fresh_unique_ref)
+                .expect("fresh blob stat")
+        );
+        assert!(
+            store
+                .get_blip(&expired_unique.id)
+                .expect("get blip")
+                .is_none()
+        );
+        assert!(
+            store
+                .get_blip(&expired_shared.id)
+                .expect("get blip")
+                .is_none()
+        );
+        assert!(
+            store
+                .get_blip(&fresh_shared.id)
+                .expect("get blip")
+                .is_some()
+        );
+        assert!(
+            store
+                .get_blip(&fresh_unique.id)
+                .expect("get blip")
+                .is_some()
+        );
+
+        let second_report = store
+            .delete_expired_blips_and_collect_orphans(&blob_store, now)
+            .expect("retention cleanup should be idempotent");
+        assert_eq!(
+            second_report,
+            RetentionCleanupReport {
+                deleted_blips: 0,
+                removed_blob_refs: Vec::new(),
+            }
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn insert_blob_payload_leaves_unique_failed_metadata_blob_for_gc() {
         let root = temp_blob_root("store-rollback-gc");
         let blob_store = LocalBlobStore::with_max_blob_bytes(&root, 1024);
@@ -3456,9 +3675,17 @@ mod tests {
     }
 
     fn insert_test_blip(store: &mut BlipStore, content: &str) -> Blip {
+        insert_test_blip_in_workspace(store, "inbox", content)
+    }
+
+    fn insert_test_blip_in_workspace(
+        store: &mut BlipStore,
+        workspace: &str,
+        content: &str,
+    ) -> Blip {
         store
             .insert_blip(&NewBlip {
-                workspace_name: "inbox".into(),
+                workspace_name: workspace.into(),
                 source_app: Some("Screenshot Tool".into()),
                 content_type: ContentType::PlainText,
                 language: None,

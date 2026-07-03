@@ -59,12 +59,12 @@ restoring only SQLite may leave payload rows whose blobs are missing, and
 restoring only blobs produces orphan files that are not visible to clients.
 
 Blob writes use an atomic temp-file flow: write bytes to a temporary file in the
-blob directory, fsync the file, atomically rename it into the hash-addressed
-path, then commit the SQLite row that references it. If the final blob path
-already exists with the expected size and hash, the writer reuses it. Startup or
-maintenance recovery may delete stale temp files and may either remove orphan
-final blobs or leave them for a later garbage-collection pass; it must not
-invent payload rows for orphan files.
+blob directory, fsync the file, atomically publish it into the hash-addressed
+path with a link-or-equivalent operation, then commit the SQLite row that
+references it. If the final blob path already exists with the expected size and
+hash, the writer reuses it. Startup or maintenance recovery may delete stale
+temp files and may either remove orphan final blobs or leave them for a later
+garbage-collection pass; it must not invent payload rows for orphan files.
 
 `content_hash` enables dedupe across payload rows. Multiple blips may reference
 the same blob path when their bytes are identical. Deleting a blip or payload
@@ -88,6 +88,12 @@ existing blip:
 `blips.content` remains populated for existing and new text records, preserving
 old readers and FTS over text content. New text inserts write both the legacy
 `blips` row and its `blip_payloads` row in the same transaction.
+
+Rollback to a pre-rich-payload binary is not supported for an active rich
+payload store. Before testing older binaries, make a complete backup of both the
+SQLite database and blob directory. Restore validation should cover SQLite-only,
+blob-only, and complete backup cases so missing blobs surface as inspection
+states and orphan blobs remain garbage-collectable.
 
 ## API Boundaries
 
@@ -132,6 +138,12 @@ Normalized image metadata should use stable field names for `mime_type`,
 `width`, `height`, `byte_size`, and `platform_format`. Width and height describe
 the decoded pixel dimensions. Byte size describes the stored or to-be-stored
 encoded bytes, not an estimated in-memory bitmap size.
+
+Manual platform validation is tracked in
+[rich-payload-reliability.md](../rich-payload-reliability.md). Until the live
+Linux backend exposes X11 and Wayland as separate platform values, manual
+evidence should record the session type alongside the generic Linux platform
+format.
 
 ## File Lists, Rich Text, and Unknown Formats
 

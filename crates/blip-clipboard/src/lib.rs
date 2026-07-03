@@ -1017,6 +1017,33 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_non_square_rgba_fixture_with_stable_metadata() {
+        let rgba = [
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255, 255, 0, 255, 255, 0,
+            255, 255, 255,
+        ];
+        let payload = normalize_image(
+            ImageData {
+                width: 2,
+                height: 3,
+                bytes: Cow::Borrowed(&rgba),
+            },
+            ClipboardPlatform::Windows,
+        )
+        .expect("image should normalize");
+
+        assert_eq!(payload.mime_type, "image/png");
+        assert_eq!(payload.width, 2);
+        assert_eq!(payload.height, 3);
+        assert_eq!(payload.byte_size, payload.bytes.len());
+        assert!(payload.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(
+            payload.platform_format.as_deref(),
+            Some("arboard:CF_DIB-CF_BITMAP-PNG-decoded-rgba")
+        );
+    }
+
+    #[test]
     fn rejects_non_rgba_image_data() {
         let error = normalize_image(
             ImageData {

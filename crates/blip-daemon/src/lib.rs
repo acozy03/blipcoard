@@ -590,9 +590,13 @@ where
     }
 
     pub fn run(&mut self) -> Result<(), DaemonError> {
+        self.run_retention_cleanup()?;
+
         loop {
             match self.source.wait_for_next()? {
-                RuntimeEvent::Idle => {}
+                RuntimeEvent::Idle => {
+                    self.run_retention_cleanup()?;
+                }
                 RuntimeEvent::ClipboardTextChanged { text } => {
                     self.ingest_clipboard_text(text)?;
                 }
@@ -614,6 +618,13 @@ where
                 RuntimeEvent::Shutdown => return Ok(()),
             }
         }
+    }
+
+    fn run_retention_cleanup(&mut self) -> Result<(), DaemonError> {
+        let blob_store = LocalBlobStore::new(self.blob_data_dir());
+        self.store
+            .delete_expired_blips_and_collect_orphans(&blob_store, Utc::now())?;
+        Ok(())
     }
 
     fn ingest_clipboard_text(&mut self, text: String) -> Result<(), DaemonError> {
@@ -2128,6 +2139,64 @@ mod tests {
     }
 
     #[test]
+    fn runtime_runs_retention_cleanup_on_startup() {
+        let root = unique_temp_dir("blipcoard-runtime-retention");
+        std::fs::create_dir_all(&root).expect("temp root should create");
+        let db_path = root.join("blipcoard.db");
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&blip_core::NewWorkspace {
+                name: "retained".to_owned(),
+                description: None,
+                color: None,
+                agent_access: false,
+                sticky_capture: false,
+                retention_days: Some(1),
+            })
+            .expect("workspace should create");
+        let blip = insert_payload_test_blip_in_workspace(&mut store, "retained", "expired image");
+        let blob_store = LocalBlobStore::new(&root);
+        let payload = store
+            .insert_blob_payload(
+                &blip.id,
+                &image_export_payload(b"expired image"),
+                &blob_store,
+            )
+            .expect("payload should insert");
+        let blob_ref = payload.blob_ref.expect("payload should have blob ref");
+        let expired_at = Utc::now() - chrono::Duration::days(2);
+        store
+            .connection()
+            .execute(
+                "UPDATE blips SET created_at = ?1 WHERE id = ?2",
+                (&expired_at, &blip.id),
+            )
+            .expect("blip should be expired");
+        let source = ScriptedIngestionSource {
+            events: vec![RuntimeEvent::Shutdown],
+            calls: 0,
+        };
+        let mut runtime = DaemonRuntime::new(&db_path, store, source);
+
+        runtime.run().expect("runtime should stop cleanly");
+
+        assert!(
+            runtime
+                .store
+                .get_blip(&blip.id)
+                .expect("blip lookup should succeed")
+                .is_none()
+        );
+        assert!(
+            !blob_store
+                .exists(&blob_ref)
+                .expect("blob stat should succeed")
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn runtime_reports_health_from_owned_store() {
         let store = BlipStore::in_memory().expect("store should initialize");
         let runtime = DaemonRuntime::new(
@@ -3454,6 +3523,86 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_returns_payload_too_large_for_allowed_oversized_export() {
+        let root = unique_temp_dir("blipcoard-export-too-large");
+        std::fs::create_dir_all(&root).expect("temp root should create");
+        let db_path = root.join("blipcoard.db");
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&blip_core::NewWorkspace {
+                name: "agent-feed".to_owned(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should create");
+        store
+            .set_workspace_policy(&WorkspacePolicy {
+                workspace_name: "agent-feed".to_owned(),
+                rich_capture_enabled: true,
+                image_capture_enabled: true,
+                rich_payload_visibility: RichPayloadVisibility::SafePreview,
+                agent_raw_payload_access: true,
+            })
+            .expect("policy should update");
+        let blip = insert_payload_test_blip_in_workspace(&mut store, "agent-feed", "large image");
+        let blob_store = LocalBlobStore::new(&root);
+        let payload = store
+            .insert_blob_payload(&blip.id, &image_export_payload(b"large image"), &blob_store)
+            .expect("payload should insert");
+        let oversized_blob_path = blob_store
+            .root()
+            .join(payload.blob_ref.as_deref().expect("blob ref"));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(oversized_blob_path)
+            .expect("blob should open")
+            .set_len(MAX_PAYLOAD_EXPORT_BYTES + 1)
+            .expect("blob should become oversized");
+        let mut runtime = DaemonRuntime::new(
+            &db_path,
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "allowed-too-large",
+            DaemonCommand::ExportPayload,
+            DaemonRequestPayload::ExportPayload {
+                payload_id: payload.id,
+                requester: PayloadRequester::Cli,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Error);
+        assert_eq!(
+            response.error.map(|error| error.code),
+            Some(DaemonApiErrorCode::PayloadTooLarge)
+        );
+        assert!(
+            runtime
+                .store
+                .list_audit_events()
+                .expect("audit should list")
+                .iter()
+                .any(
+                    |event| event.event_type == AuditEventType::PayloadRawExported
+                        && event
+                            .details_json
+                            .as_deref()
+                            .is_some_and(|details| details.contains("\"decision\":\"denied\""))
+                )
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn dispatch_returns_typed_errors_for_unsupported_and_missing_payload_blobs() {
         let root = unique_temp_dir("blipcoard-payload-errors");
         std::fs::create_dir_all(&root).expect("temp root should create");
@@ -3960,11 +4109,18 @@ mod tests {
             image_payload.metadata["preview"]["max_dimension"],
             IMAGE_PREVIEW_MAX_DIMENSION
         );
-        assert!(
-            LocalBlobStore::new(&root)
-                .exists(preview_ref)
-                .expect("preview blob should stat")
+        let blob_store = LocalBlobStore::new(&root);
+        let preview_bytes = blob_store
+            .read(preview_ref)
+            .expect("preview blob should read");
+        let decoded_preview =
+            image::load_from_memory(&preview_bytes).expect("preview should decode as an image");
+        assert_eq!(decoded_preview.dimensions(), (256, 64));
+        assert_eq!(
+            image_payload.metadata["preview"]["byte_size"],
+            preview_bytes.len()
         );
+        assert_eq!(image_payload.metadata["preview"]["mime_type"], "image/png");
 
         let _ = std::fs::remove_dir_all(root);
     }

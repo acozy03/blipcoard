@@ -86,6 +86,12 @@ pub struct BlipMove {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetentionCleanupReport {
+    pub deleted_blips: usize,
+    pub removed_blob_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewBlip {
     pub workspace_name: String,
     pub source_app: Option<String>,
