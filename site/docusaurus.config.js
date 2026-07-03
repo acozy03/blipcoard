@@ -6,7 +6,7 @@ import npm2yarn from '@docusaurus/remark-plugin-npm2yarn';
 const config = {
   title: 'blipcoard',
   tagline: 'Runtime-first clipboard routing for agent workflows',
-  favicon: 'img/logo.svg',
+  favicon: 'img/blipcoard-removebg-preview.png',
 
   future: {
     v4: true,
@@ -65,14 +65,14 @@ const config = {
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
-      image: 'img/logo.svg',
+      image: 'img/blipcoard-removebg-preview.png',
       colorMode: {
         respectPrefersColorScheme: true,
       },
       navbar: {
         logo: {
           alt: 'blipcoard logo',
-          src: 'img/logo.svg',
+          src: 'img/blipcoard-removebg-preview.png',
         },
         items: [
           {

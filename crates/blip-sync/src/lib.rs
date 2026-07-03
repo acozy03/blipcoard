@@ -322,6 +322,7 @@ pub struct CreateWorkspaceRequest {
 pub struct CreateWorkspaceResponse {
     pub workspace: HostedWorkspaceSummary,
     pub member: MemberSummary,
+    pub session: HostedDeviceSession,
     pub event: WorkspaceEvent,
 }
 
@@ -362,6 +363,7 @@ impl From<HostedMember> for MemberSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateJoinCodeRequest {
     pub created_by_member_id: String,
+    pub session_token: String,
     pub role: HostedRole,
     pub expires_in_seconds: Option<i64>,
     pub max_uses: Option<u32>,
@@ -411,12 +413,24 @@ pub struct JoinWorkspaceRequest {
 pub struct JoinWorkspaceResponse {
     pub workspace: HostedWorkspaceSummary,
     pub member: MemberSummary,
+    pub session: HostedDeviceSession,
     pub event: WorkspaceEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostedDeviceSession {
+    pub token: String,
+    pub member_id: String,
+    pub workspace_id: String,
+    pub device_label: Option<String>,
+    pub client_kind: Option<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublishBlipRequest {
     pub publisher_member_id: String,
+    pub session_token: String,
     pub local_blip_id: String,
     pub content_type: String,
     pub content: String,
@@ -466,6 +480,74 @@ pub struct WorkspaceEvent {
 pub struct EventQuery {
     #[serde(default)]
     pub after_sequence: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberQuery {
+    pub member_id: String,
+    pub session_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateTagsRequest {
+    pub member_id: String,
+    pub session_token: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateTagsResponse {
+    pub blip: HostedBlipSummary,
+    pub event: WorkspaceEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostedAccessAction {
+    Read,
+    Copy,
+    Export,
+}
+
+impl HostedAccessAction {
+    pub const fn event_type(&self) -> &'static str {
+        match self {
+            Self::Read => "blip_read",
+            Self::Copy => "blip_copied",
+            Self::Export => "blip_exported",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordAccessEventRequest {
+    pub member_id: String,
+    pub session_token: String,
+    pub action: HostedAccessAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordAccessEventResponse {
+    pub event: WorkspaceEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresenceHeartbeatRequest {
+    pub member_id: String,
+    pub session_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresenceHeartbeatResponse {
+    pub members: Vec<MemberPresenceSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberPresenceSummary {
+    pub member_id: String,
+    pub display_name: String,
+    pub role: HostedRole,
+    pub last_seen_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]

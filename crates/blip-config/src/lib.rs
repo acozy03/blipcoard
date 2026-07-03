@@ -37,6 +37,7 @@ pub struct HostedConfig {
     pub member_id: Option<String>,
     pub member_display_name: Option<String>,
     pub member_role: Option<String>,
+    pub session_token: Option<String>,
     #[serde(default)]
     pub sticky_share_enabled: bool,
 }

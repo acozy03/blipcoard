@@ -1248,7 +1248,8 @@ where
         HostedStatusResponse {
             connected: self.hosted.service_url.is_some()
                 && self.hosted.workspace_id.is_some()
-                && self.hosted.member_id.is_some(),
+                && self.hosted.member_id.is_some()
+                && self.hosted.session_token.is_some(),
             service_url: self.hosted.service_url.clone(),
             workspace_id: self.hosted.workspace_id.clone(),
             workspace_name: self.hosted.workspace_name.clone(),
@@ -1284,6 +1285,7 @@ where
         self.hosted.member_id = Some(joined.member.id.clone());
         self.hosted.member_display_name = Some(joined.member.display_name.clone());
         self.hosted.member_role = Some(role_name(joined.member.role).to_owned());
+        self.hosted.session_token = Some(joined.session.token.clone());
         self.hosted.sticky_share_enabled = false;
         self.persist_hosted_config()?;
         self.store.record_hosted_event(
@@ -1320,6 +1322,11 @@ where
             .member_id
             .clone()
             .ok_or(HostedOperationError::NotConnected)?;
+        let session_token = self
+            .hosted
+            .session_token
+            .clone()
+            .ok_or(HostedOperationError::NotConnected)?;
         let blip = self
             .store
             .get_blip(blip_id)?
@@ -1329,6 +1336,7 @@ where
             &hosted_workspace_id,
             &PublishBlipRequest {
                 publisher_member_id,
+                session_token,
                 local_blip_id: blip.id.clone(),
                 content_type: blip.content_type.as_str().to_owned(),
                 content: blip.content.clone(),
