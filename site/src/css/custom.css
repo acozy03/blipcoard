@@ -88,12 +88,12 @@ body {
 }
 
 .navbar__logo {
-  width: 34px;
+  width: 58px;
   height: 34px;
 }
 
 .navbar__logo img {
-  width: 34px;
+  width: 58px;
   height: 34px;
   object-fit: contain;
 }
