@@ -12,12 +12,14 @@ Core product surfaces:
 - `blip`: CLI client
 - `blipcoard` desktop app
 
-Start with the design docs in [docs/architecture.md](./docs/architecture.md) and
-[docs/project-breakdown.md](./docs/project-breakdown.md).
+Start with the design docs in [docs/architecture.md](./docs/architecture.md),
+[docs/project-breakdown.md](./docs/project-breakdown.md), and
+[docs/runtime-distribution.md](./docs/runtime-distribution.md).
 
 ## Current Status
 
-The Phase 8 rich clipboard pipeline is in progress on `develop`.
+Phase 8 rich clipboard content is complete on `develop`; Phase 9 packaging and
+distribution is in progress.
 
 Today the workspace includes:
 
@@ -30,8 +32,8 @@ Today the workspace includes:
 - `apps/desktop`: desktop UI backed by the daemon API
 - GitHub Actions for format, lint, test, and build checks
 
-Current work is hardening rich payload reliability: blob lifecycle behavior,
-retention cleanup, recovery, and cross-platform manual checks.
+Current work is defining the runtime-first distribution model so installs keep
+the daemon, CLI, desktop app, and local store ownership aligned.
 
 ## Tooling
 

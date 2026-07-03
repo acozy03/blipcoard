@@ -276,6 +276,17 @@ Success condition:
 - users can install, upgrade, and run `blipcoard` without bypassing the daemon,
   CLI, or local store ownership model
 
+Phase 9.1 distribution model:
+
+- supported installs are full install (`blipd`, `blip`, desktop app) and
+  CLI-only install (`blipd`, `blip`)
+- desktop-only installs are unsupported because the desktop app is a daemon
+  client, not a standalone runtime
+- config, data, blob, IPC, first-run, startup, and uninstall expectations are
+  documented in [runtime-distribution.md](./runtime-distribution.md)
+- Windows packaging requires a user-scoped IPC implementation before Windows
+  installs can satisfy the same daemon/client boundary as macOS and Linux
+
 ## Phase 10: Documentation site and public docs
 
 Goal:

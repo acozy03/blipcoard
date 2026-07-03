@@ -9,6 +9,7 @@ blipcoard/
     project-breakdown.md
     mvp-phases.md
     repo-layout.md
+    runtime-distribution.md
   crates/
     blip-core/
     blip-daemon/
