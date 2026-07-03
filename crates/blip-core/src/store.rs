@@ -1,12 +1,14 @@
+use crate::LocalBlobStore;
 use crate::domain::{
     ActorType, AuditEvent, AuditEventType, Blip, BlipMove, BlipSummary, ClipboardPayload,
-    ContentType, NewBlip, NewWorkspace, PayloadKind, Workspace,
+    ContentType, NewBlip, NewClipboardPayload, NewWorkspace, PayloadKind, Workspace,
 };
 use crate::error::{BlipError, is_sqlite_busy_error};
 use crate::secrets::add_secret_tags;
 use crate::typing::{add_type_tag, resolved_content_type};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
+use std::collections::HashSet;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
@@ -408,6 +410,185 @@ impl BlipStore {
 
     pub fn get_blip_payloads(&self, blip_id: &str) -> Result<Vec<ClipboardPayload>, BlipError> {
         Self::get_blip_payloads_from(&self.conn, blip_id)
+    }
+
+    pub fn insert_blob_payload(
+        &mut self,
+        blip_id: &str,
+        payload: &NewClipboardPayload,
+        blob_store: &LocalBlobStore,
+    ) -> Result<ClipboardPayload, BlipError> {
+        validate_blob_payload(payload)?;
+
+        let metadata = blob_store.write(&payload.bytes)?;
+        match self.insert_blob_payload_metadata(blip_id, payload, &metadata) {
+            Ok(inserted) => Ok(inserted),
+            Err(error) => {
+                if !self.is_blob_ref_referenced(&metadata.blob_ref)? {
+                    let _ = blob_store.delete(&metadata.blob_ref);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn insert_blob_payload_metadata(
+        &mut self,
+        blip_id: &str,
+        payload: &NewClipboardPayload,
+        metadata: &crate::BlobMetadata,
+    ) -> Result<ClipboardPayload, BlipError> {
+        self.with_busy_retry(|store| {
+            store.insert_blob_payload_metadata_once(blip_id, payload, metadata)
+        })
+    }
+
+    fn insert_blob_payload_metadata_once(
+        &mut self,
+        blip_id: &str,
+        payload: &NewClipboardPayload,
+        metadata: &crate::BlobMetadata,
+    ) -> Result<ClipboardPayload, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        if Self::get_blip_from(&tx, blip_id)?.is_none() {
+            return Err(BlipError::BlipNotFound(blip_id.to_owned()));
+        }
+
+        let id = format!("{blip_id}:payload:{}", Uuid::new_v4());
+        let created_at = Utc::now();
+        let metadata_json = serde_json::to_string(&payload.metadata)?;
+        tx.execute(
+            "INSERT INTO blip_payloads (
+                id, blip_id, payload_kind, mime_type, platform_format, byte_size, content_hash,
+                source_app, captured_at, preview_ref, blob_ref, inline_text, metadata_json, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?9)",
+            params![
+                id,
+                blip_id,
+                payload.kind.as_str(),
+                &payload.mime_type,
+                &payload.platform_format,
+                i64::try_from(metadata.byte_size).map_err(|_| BlipError::InvalidInput {
+                    field: "byte_size",
+                    reason: "payload is too large for SQLite metadata",
+                })?,
+                &metadata.content_hash,
+                &payload.source_app,
+                created_at,
+                &payload.preview_ref,
+                &metadata.blob_ref,
+                &payload.inline_text,
+                metadata_json,
+            ],
+        )?;
+
+        let inserted = Self::get_payload_from(&tx, &id)?
+            .ok_or_else(|| BlipError::Database(rusqlite::Error::QueryReturnedNoRows))?;
+        tx.commit()?;
+        Ok(inserted)
+    }
+
+    pub fn referenced_blob_refs(&self) -> Result<HashSet<String>, BlipError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT blob_ref
+             FROM blip_payloads
+             WHERE blob_ref IS NOT NULL
+             ORDER BY blob_ref ASC",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<HashSet<_>, _>>()
+            .map_err(BlipError::from)
+    }
+
+    pub fn delete_blip_and_collect_orphans(
+        &mut self,
+        blob_store: &LocalBlobStore,
+        blip_id: &str,
+    ) -> Result<bool, BlipError> {
+        let deleted_blob_refs = self.delete_blip_and_return_blob_refs(blip_id)?;
+        if deleted_blob_refs.is_empty() {
+            return Ok(false);
+        }
+
+        for blob_ref in deleted_blob_refs {
+            if !self.is_blob_ref_referenced(&blob_ref)? {
+                blob_store.delete(&blob_ref)?;
+            }
+        }
+
+        Ok(true)
+    }
+
+    fn delete_blip_and_return_blob_refs(
+        &mut self,
+        blip_id: &str,
+    ) -> Result<HashSet<String>, BlipError> {
+        self.with_busy_retry(|store| store.delete_blip_and_return_blob_refs_once(blip_id))
+    }
+
+    fn delete_blip_and_return_blob_refs_once(
+        &mut self,
+        blip_id: &str,
+    ) -> Result<HashSet<String>, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        if Self::get_blip_from(&tx, blip_id)?.is_none() {
+            return Err(BlipError::BlipNotFound(blip_id.to_owned()));
+        }
+
+        let blob_refs = Self::referenced_blob_refs_for_blip_from(&tx, blip_id)?;
+        tx.execute("DELETE FROM blips WHERE id = ?1", [blip_id])?;
+        tx.commit()?;
+        Ok(blob_refs)
+    }
+
+    fn is_blob_ref_referenced(&self, blob_ref: &str) -> Result<bool, BlipError> {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM blip_payloads WHERE blob_ref = ?1 LIMIT 1",
+                [blob_ref],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|row| row.is_some())
+            .map_err(BlipError::from)
+    }
+
+    fn get_payload_from(
+        conn: &Connection,
+        payload_id: &str,
+    ) -> Result<Option<ClipboardPayload>, BlipError> {
+        let mut stmt = conn.prepare(
+            "SELECT id, blip_id, payload_kind, mime_type, platform_format, byte_size,
+                    content_hash, source_app, captured_at, preview_ref, blob_ref, inline_text,
+                    metadata_json, created_at
+             FROM blip_payloads
+             WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query([payload_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(map_payload_row(row)?))
+    }
+
+    fn referenced_blob_refs_for_blip_from(
+        conn: &Connection,
+        blip_id: &str,
+    ) -> Result<HashSet<String>, BlipError> {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT blob_ref
+             FROM blip_payloads
+             WHERE blip_id = ?1 AND blob_ref IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([blip_id], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<HashSet<_>, _>>()
+            .map_err(BlipError::from)
     }
 
     fn get_blip_from(conn: &Connection, id: &str) -> Result<Option<Blip>, BlipError> {
@@ -985,6 +1166,38 @@ fn validate_blip(blip: &NewBlip) -> Result<(), BlipError> {
     Ok(())
 }
 
+fn validate_blob_payload(payload: &NewClipboardPayload) -> Result<(), BlipError> {
+    if payload.bytes.is_empty() {
+        return Err(BlipError::InvalidInput {
+            field: "payload.bytes",
+            reason: "must not be empty",
+        });
+    }
+
+    if !matches!(
+        payload.kind,
+        PayloadKind::Image | PayloadKind::FileList | PayloadKind::Html | PayloadKind::Rtf
+    ) {
+        return Err(BlipError::InvalidInput {
+            field: "payload.kind",
+            reason: "must be a blob-backed rich payload kind",
+        });
+    }
+
+    if !matches!(
+        payload.kind,
+        PayloadKind::Text | PayloadKind::Html | PayloadKind::Rtf
+    ) && payload.inline_text.is_some()
+    {
+        return Err(BlipError::InvalidInput {
+            field: "payload.inline_text",
+            reason: "must be empty for binary payloads",
+        });
+    }
+
+    Ok(())
+}
+
 fn validate_search_query(query: &str) -> Result<(), BlipError> {
     if query.trim().is_empty() {
         return Err(BlipError::InvalidInput {
@@ -1342,6 +1555,183 @@ mod tests {
         assert_eq!(payloads[0].source_app.as_deref(), Some("Safari"));
         assert_eq!(payloads[0].inline_text.as_deref(), Some("copied text"));
         assert!(payloads[0].blob_ref.is_none());
+    }
+
+    #[test]
+    fn insert_blob_payload_writes_blob_metadata_and_references() {
+        let root = temp_blob_root("store-blob-metadata");
+        let blob_store = LocalBlobStore::with_max_blob_bytes(&root, 1024);
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let blip = insert_test_blip(&mut store, "image placeholder");
+
+        let payload = store
+            .insert_blob_payload(&blip.id, &image_payload(b"png bytes"), &blob_store)
+            .expect("blob payload should insert");
+
+        assert_eq!(payload.kind, PayloadKind::Image);
+        assert_eq!(payload.mime_type.as_deref(), Some("image/png"));
+        assert_eq!(payload.byte_size, 9);
+        assert!(
+            payload
+                .content_hash
+                .as_deref()
+                .is_some_and(|hash| hash.starts_with("sha256:"))
+        );
+        let blob_ref = payload.blob_ref.as_deref().expect("blob ref should exist");
+        assert!(
+            blob_store
+                .exists(blob_ref)
+                .expect("blob exists should work")
+        );
+        assert_eq!(
+            store.referenced_blob_refs().expect("refs should list"),
+            HashSet::from([blob_ref.to_owned()])
+        );
+
+        let payloads = store
+            .get_blip_payloads(&blip.id)
+            .expect("payloads should list");
+        assert_eq!(payloads.len(), 2);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_blip_keeps_shared_blob_until_last_reference_is_deleted() {
+        let root = temp_blob_root("store-shared-delete");
+        let blob_store = LocalBlobStore::with_max_blob_bytes(&root, 1024);
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let first = insert_test_blip(&mut store, "first image placeholder");
+        let second = insert_test_blip(&mut store, "second image placeholder");
+
+        let first_payload = store
+            .insert_blob_payload(&first.id, &image_payload(b"shared image"), &blob_store)
+            .expect("first payload should insert");
+        let second_payload = store
+            .insert_blob_payload(&second.id, &image_payload(b"shared image"), &blob_store)
+            .expect("second payload should insert");
+        let blob_ref = first_payload
+            .blob_ref
+            .as_deref()
+            .expect("first payload should have blob ref");
+        assert_eq!(first_payload.blob_ref, second_payload.blob_ref);
+
+        assert!(
+            store
+                .delete_blip_and_collect_orphans(&blob_store, &first.id)
+                .expect("first delete should work")
+        );
+        assert!(
+            blob_store
+                .exists(blob_ref)
+                .expect("blob should still exist")
+        );
+        assert_eq!(
+            store.referenced_blob_refs().expect("refs should list"),
+            HashSet::from([blob_ref.to_owned()])
+        );
+
+        assert!(
+            store
+                .delete_blip_and_collect_orphans(&blob_store, &second.id)
+                .expect("second delete should work")
+        );
+        assert!(!blob_store.exists(blob_ref).expect("blob should be gone"));
+        assert!(
+            store
+                .referenced_blob_refs()
+                .expect("refs should list")
+                .is_empty()
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn garbage_collect_removes_unreferenced_blob_files() {
+        let root = temp_blob_root("store-gc");
+        let blob_store = LocalBlobStore::with_max_blob_bytes(&root, 1024);
+        let orphan = blob_store.write(b"orphan").expect("orphan should write");
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let blip = insert_test_blip(&mut store, "referenced image placeholder");
+        let referenced = store
+            .insert_blob_payload(&blip.id, &image_payload(b"referenced"), &blob_store)
+            .expect("referenced payload should insert");
+        let referenced_blob_ref = referenced
+            .blob_ref
+            .as_deref()
+            .expect("referenced payload should have blob ref")
+            .to_owned();
+
+        let report = blob_store
+            .garbage_collect(&store.referenced_blob_refs().expect("refs should list"))
+            .expect("gc should work");
+
+        assert_eq!(report.removed, vec![orphan.blob_ref]);
+        assert!(
+            blob_store
+                .exists(&referenced_blob_ref)
+                .expect("referenced blob should remain")
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn insert_blob_payload_cleans_unique_blob_after_metadata_failure() {
+        let root = temp_blob_root("store-rollback-cleanup");
+        let blob_store = LocalBlobStore::with_max_blob_bytes(&root, 1024);
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+
+        let error = store
+            .insert_blob_payload(
+                "missing-blip",
+                &image_payload(b"rollback bytes"),
+                &blob_store,
+            )
+            .expect_err("missing blip should fail after blob write");
+        assert!(matches!(error, BlipError::BlipNotFound(id) if id == "missing-blip"));
+        assert!(
+            blob_store
+                .garbage_collect(&HashSet::new())
+                .expect("gc should find no leftovers")
+                .removed
+                .is_empty()
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failed_blob_payload_metadata_does_not_delete_referenced_dedup_blob() {
+        let root = temp_blob_root("store-rollback-shared");
+        let blob_store = LocalBlobStore::with_max_blob_bytes(&root, 1024);
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let blip = insert_test_blip(&mut store, "referenced image placeholder");
+        let payload = store
+            .insert_blob_payload(&blip.id, &image_payload(b"shared rollback"), &blob_store)
+            .expect("payload should insert");
+        let blob_ref = payload
+            .blob_ref
+            .as_deref()
+            .expect("payload should have blob ref")
+            .to_owned();
+
+        let error = store
+            .insert_blob_payload(
+                "missing-blip",
+                &image_payload(b"shared rollback"),
+                &blob_store,
+            )
+            .expect_err("missing blip should fail after dedupe");
+        assert!(matches!(error, BlipError::BlipNotFound(id) if id == "missing-blip"));
+        assert!(
+            blob_store
+                .exists(&blob_ref)
+                .expect("referenced blob should remain")
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2312,6 +2702,38 @@ mod tests {
             })
             .expect("workspace should be created");
         store
+    }
+
+    fn insert_test_blip(store: &mut BlipStore, content: &str) -> Blip {
+        store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".into(),
+                source_app: Some("Screenshot Tool".into()),
+                content_type: ContentType::PlainText,
+                language: None,
+                content: content.into(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("test blip should insert")
+    }
+
+    fn image_payload(bytes: &[u8]) -> NewClipboardPayload {
+        NewClipboardPayload {
+            kind: PayloadKind::Image,
+            mime_type: Some("image/png".into()),
+            platform_format: Some("public.png".into()),
+            source_app: Some("Screenshot Tool".into()),
+            preview_ref: None,
+            inline_text: None,
+            metadata: serde_json::json!({ "width": 1, "height": 1 }),
+            bytes: bytes.to_vec(),
+        }
+    }
+
+    fn temp_blob_root(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("blipcoard-{label}-{}", Uuid::new_v4()))
     }
 
     fn insert_raw_blip(store: &BlipStore, id: &str, workspace: &str, content: &str) {

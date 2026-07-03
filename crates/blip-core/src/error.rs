@@ -11,6 +11,9 @@ pub enum BlipError {
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
     #[error("invalid persisted value for {field}: {value}")]
     InvalidPersistedValue { field: &'static str, value: String },
 
@@ -22,6 +25,15 @@ pub enum BlipError {
 
     #[error("invalid search query: {0}")]
     InvalidSearchQuery(String),
+
+    #[error("invalid blob ref: {0}")]
+    InvalidBlobRef(String),
+
+    #[error("blob is too large: {size_bytes} bytes exceeds limit of {max_bytes} bytes")]
+    BlobTooLarge { size_bytes: u64, max_bytes: u64 },
+
+    #[error("blob integrity mismatch for ref: {0}")]
+    BlobIntegrityMismatch(String),
 
     #[error("workspace `{0}` does not exist")]
     WorkspaceNotFound(String),

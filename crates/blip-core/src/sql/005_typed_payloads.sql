@@ -25,6 +25,10 @@ ON blip_payloads (blip_id);
 CREATE INDEX IF NOT EXISTS idx_blip_payloads_kind_created_at
 ON blip_payloads (payload_kind, created_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_blip_payloads_blob_ref
+ON blip_payloads (blob_ref)
+WHERE blob_ref IS NOT NULL;
+
 INSERT OR IGNORE INTO blip_payloads (
   id,
   blip_id,
