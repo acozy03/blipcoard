@@ -73,7 +73,7 @@ impl LocalBlobStore {
             .open(self.root.join(LOCK_FILE))?;
         lock_file.lock_exclusive()?;
         let result = operation();
-        lock_file.unlock()?;
+        FileExt::unlock(&lock_file)?;
         result
     }
 
