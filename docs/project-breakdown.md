@@ -237,6 +237,9 @@ Subphases:
    - test crash recovery around partially written blob files
    - test large payload limits and backpressure in the daemon loop
    - verify behavior across supported OS clipboard implementations
+   - maintain a manual rich payload reliability checklist for macOS, Linux X11,
+     Linux Wayland, and Windows in
+     [rich-payload-reliability.md](./rich-payload-reliability.md)
 
 Deliverables:
 

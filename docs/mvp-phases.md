@@ -235,6 +235,20 @@ Phase 8.7 daemon export behavior:
 - denied access, missing blobs, unsupported payloads, and oversized exports are
   returned as typed daemon errors
 
+Phase 8.8 reliability behavior:
+
+- duplicate payload bytes use content-addressed blob dedupe while blip rows
+  remain the auditable copy-event record
+- retention cleanup deletes expired blips and removes only raw/preview blobs no
+  longer referenced by any remaining payload
+- crash recovery preserves recent active temp files, removes stale temp files,
+  and leaves failed metadata writes for coordinated garbage collection
+- large payload limits are enforced at the blob/export boundary with typed
+  errors
+- cross-platform manual checks for screenshots, copied images, file lists, HTML,
+  unsupported formats, backup/restore, and rollback are documented in
+  [rich-payload-reliability.md](./rich-payload-reliability.md)
+
 Out of scope:
 
 - optical character recognition as an ingestion requirement

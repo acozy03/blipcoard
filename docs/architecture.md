@@ -254,7 +254,8 @@ Payload categories:
 - image: screenshots and copied image data, such as PNG, JPEG, TIFF, or platform
   bitmap formats
 - file list: copied file references from file managers or drag/copy workflows
-- rich text: HTML and RTF with plain-text fallback
+- rich text: a product grouping for `html` and `rtf` payload kinds with
+  plain-text fallback
 - unknown: platform formats that can be observed but not decoded yet
 
 The product should model the clipboard payload independently from the storage
@@ -264,7 +265,7 @@ mechanism. A future payload API should look conceptually like:
 - image payloads carry MIME type, dimensions, byte size, hash, and blob reference
 - file-list payloads carry path metadata and capture policy, not eagerly copied
   file bytes by default
-- rich-text payloads carry sanitized metadata plus a plain-text fallback
+- HTML and RTF payloads carry sanitized metadata plus a plain-text fallback
 - unknown payloads carry platform format identifiers and byte-size metadata when
   available
 
@@ -279,6 +280,12 @@ Storage rules for rich payloads:
   updates
 - garbage collect unreferenced blobs after retention or explicit deletion
 - never store large binary payloads as base64 in `Blip.content`
+
+Cross-platform rich payload reliability checks are documented in
+[rich-payload-reliability.md](./rich-payload-reliability.md). Those checks cover
+manual screenshot, copied image, file-list, HTML, unsupported-format, backup,
+restore, and rollback evidence across macOS, Linux X11, Linux Wayland, and
+Windows.
 
 Preview rules:
 

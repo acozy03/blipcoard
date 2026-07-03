@@ -59,6 +59,31 @@ When making Rust changes here:
 - avoid `unwrap()` in library code unless the invariant is explicit and local
 - add tests for storage, routing, and CLI behavior when behavior changes
 
+## Orchestration and Local Task Memory
+
+Use Beads (`bd`) as the local task ledger for multi-step work. Beads data is
+machine-local project memory and must stay out of git:
+
+- keep `.beads/` ignored and never stage, commit, push, or PR Beads data
+- if `bd` is missing, install or initialize it locally before splitting work
+- create one coordinator bead for the GitHub issue or project goal, and attach
+  child beads for implementation, docs, verification, and review tracks
+- use the GitHub issue number as external context in bead titles or comments,
+  but keep GitHub issues and local Beads state separate
+- before starting work, record the intended split in Beads; while working, have
+  each subagent comment progress, findings, blockers, and verification commands
+  on its assigned bead
+- the orchestrator checks Beads for status, reconciles progress, and tells
+  subagents to close their beads when their assigned work is done
+- close child beads only after their work is implemented or explicitly ruled out,
+  and close the coordinator only after the PR is merged or the user-visible goal
+  is otherwise complete
+
+When using subagents, treat the main agent as orchestrator: delegate focused,
+bounded tasks; require written findings in Beads; review their outputs before
+editing; and keep final integration, commits, pushes, and PRs under the main
+agent's control.
+
 ## GitHub Issue Workflow
 
 Use the `gh` CLI as part of normal task management:
