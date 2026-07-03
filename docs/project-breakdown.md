@@ -283,6 +283,8 @@ Deliverables:
 - desktop bundles for macOS, Linux, Windows
 - daemon install/start behavior
 - CLI install docs
+- platform config, data, blob, IPC, log, first-run, and uninstall expectations
+  in [runtime-distribution.md](./runtime-distribution.md)
 - upgrade strategy
 
 Packaging rule:

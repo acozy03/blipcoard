@@ -162,6 +162,9 @@ Unsupported install mode:
 
 The desktop application should never be treated as a standalone product.
 Any supported desktop distribution should also include the daemon and CLI.
+The operational install model, platform paths, startup behavior, and uninstall
+policy are defined in
+[`runtime-distribution.md`](./runtime-distribution.md).
 
 ## Security Model
 
