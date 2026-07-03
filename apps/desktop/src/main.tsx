@@ -458,7 +458,7 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand-lockup">
-          <img src="/img/blipcoard-removebg-preview.png" alt="" aria-hidden="true" />
+          <img src="/img/blipcoard-logo.png" alt="" aria-hidden="true" />
           <div>
             <h1>Workspaces</h1>
             <p>{statusLabel}</p>

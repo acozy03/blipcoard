@@ -72,7 +72,7 @@ const config = {
       navbar: {
         logo: {
           alt: 'blipcoard logo',
-          src: 'img/blipcoard-removebg-preview.png',
+          src: 'img/blipcoard-logo.png',
         },
         items: [
           {
