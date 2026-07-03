@@ -4,9 +4,9 @@ import styles from './index.module.css';
 
 const sections = [
   {
-    title: 'Install and Run',
-    text: 'Set up the daemon-first runtime, CLI-only mode, desktop bundles, and upgrades.',
-    to: '/docs/operations/cli-operations',
+    title: 'Setup',
+    text: 'Clone, build, install the runtime, and start the daemon with one command.',
+    to: '/docs/start/setup',
   },
   {
     title: 'Architecture',

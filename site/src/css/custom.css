@@ -1,30 +1,126 @@
-/**
- * Any CSS included here will be global. The classic template
- * bundles Infima by default. Infima is a CSS framework designed to
- * work well for content-centric websites.
- */
-
-/* You can override the default Infima variables here. */
 :root {
-  --ifm-color-primary: #2e8555;
-  --ifm-color-primary-dark: #29784c;
-  --ifm-color-primary-darker: #277148;
-  --ifm-color-primary-darkest: #205d3b;
-  --ifm-color-primary-light: #33925d;
-  --ifm-color-primary-lighter: #359962;
-  --ifm-color-primary-lightest: #3cad6e;
-  --ifm-code-font-size: 95%;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+  --font-pixel-mono:
+    "Departure Mono", "Pixel Code", "Input Mono", "Berkeley Mono", "CommitMono",
+    "JetBrains Mono", "Cascadia Mono", "SF Mono", ui-monospace, SFMono-Regular,
+    Menlo, Consolas, monospace;
+  --blip-blue: #146382;
+  --blip-blue-strong: #0e526c;
+  --blip-blue-soft: #e7f2f7;
+  --blip-border: #d6dde2;
+  --blip-surface: #ffffff;
+  --blip-canvas: #f5f7f9;
+  --ifm-color-primary: #146382;
+  --ifm-color-primary-dark: #0e526c;
+  --ifm-color-primary-darker: #0b455c;
+  --ifm-color-primary-darkest: #09384a;
+  --ifm-color-primary-light: #247898;
+  --ifm-color-primary-lighter: #368bab;
+  --ifm-color-primary-lightest: #77c4e2;
+  --ifm-background-color: var(--blip-canvas);
+  --ifm-navbar-background-color: #ffffff;
+  --ifm-footer-background-color: #202328;
+  --ifm-font-family-base: var(--font-pixel-mono);
+  --ifm-font-family-monospace: var(--font-pixel-mono);
+  --ifm-heading-font-family: var(--font-pixel-mono);
+  --ifm-code-font-size: 0.95rem;
+  --ifm-code-background: #eef4f7;
+  --ifm-pre-background: #f0f5f8;
+  --ifm-global-radius: 6px;
+  --docusaurus-highlighted-code-line-bg: rgba(20, 99, 130, 0.14);
 }
 
-/* For readability concerns, you should choose a lighter palette in dark mode. */
 [data-theme='dark'] {
-  --ifm-color-primary: #25c2a0;
-  --ifm-color-primary-dark: #21af90;
-  --ifm-color-primary-darker: #1fa588;
-  --ifm-color-primary-darkest: #1a8870;
-  --ifm-color-primary-light: #29d5b0;
-  --ifm-color-primary-lighter: #32d8b4;
-  --ifm-color-primary-lightest: #4fddbf;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+  --blip-blue-soft: #173344;
+  --blip-border: #3a4148;
+  --blip-surface: #24272b;
+  --blip-canvas: #17191b;
+  --ifm-color-primary: #77c4e2;
+  --ifm-color-primary-dark: #54b2d5;
+  --ifm-color-primary-darker: #3c9fc4;
+  --ifm-color-primary-darkest: #2d708d;
+  --ifm-color-primary-light: #93d2ea;
+  --ifm-color-primary-lighter: #b0dfef;
+  --ifm-color-primary-lightest: #d1edf6;
+  --ifm-background-color: var(--blip-canvas);
+  --ifm-navbar-background-color: #1f2225;
+  --ifm-footer-background-color: #17191b;
+  --ifm-code-background: #202b31;
+  --ifm-pre-background: #202328;
+  --docusaurus-highlighted-code-line-bg: rgba(119, 196, 226, 0.16);
+}
+
+html {
+  font-variant-ligatures: none;
+}
+
+body {
+  letter-spacing: 0;
+}
+
+.navbar {
+  border-bottom: 1px solid var(--blip-border);
+  box-shadow: none;
+}
+
+.navbar__brand,
+.navbar__item,
+.menu__link,
+.table-of-contents__link,
+.pagination-nav__label,
+.button {
+  letter-spacing: 0;
+}
+
+.navbar__logo img {
+  color: var(--blip-blue);
+}
+
+.theme-doc-sidebar-container,
+.table-of-contents {
+  border-color: var(--blip-border) !important;
+}
+
+.theme-doc-markdown h1,
+.theme-doc-markdown h2,
+.theme-doc-markdown h3 {
+  letter-spacing: 0;
+}
+
+.theme-code-block {
+  border: 1px solid var(--blip-border);
+  border-radius: 6px;
+  box-shadow: none !important;
+}
+
+.theme-code-block div[class*='codeBlockTitle'] {
+  border-bottom: 1px solid var(--blip-border);
+  background: var(--blip-blue-soft);
+  color: var(--ifm-color-primary-darkest);
+  font-family: var(--font-pixel-mono);
+}
+
+[data-theme='dark'] .theme-code-block div[class*='codeBlockTitle'] {
+  color: var(--ifm-color-primary-lightest);
+}
+
+.code-block-error-line {
+  display: block;
+  margin: 0 calc(-1 * var(--ifm-pre-padding));
+  padding: 0 var(--ifm-pre-padding);
+  background: rgba(154, 51, 36, 0.16);
+}
+
+.code-block-success-line {
+  display: block;
+  margin: 0 calc(-1 * var(--ifm-pre-padding));
+  padding: 0 var(--ifm-pre-padding);
+  background: rgba(20, 99, 130, 0.16);
+}
+
+.DocSearch-Button,
+.navbar__search-input {
+  border: 1px solid var(--blip-border);
+  border-radius: 6px;
+  background: var(--blip-surface);
+  font-family: var(--font-pixel-mono);
 }

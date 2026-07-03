@@ -12,6 +12,12 @@ Core product surfaces:
 - `blip`: CLI client
 - `blipcoard` desktop app
 
+## One-Command Setup
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/blipcoard/blipcoard/develop/scripts/setup-dev.sh | bash
+```
+
 Start with the design docs in [docs/architecture.md](./docs/architecture.md),
 [docs/project-breakdown.md](./docs/project-breakdown.md), and
 [docs/runtime-distribution.md](./docs/runtime-distribution.md). Desktop bundle
