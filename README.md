@@ -16,6 +16,8 @@ Start with the design docs in [docs/architecture.md](./docs/architecture.md),
 [docs/project-breakdown.md](./docs/project-breakdown.md), and
 [docs/runtime-distribution.md](./docs/runtime-distribution.md). Desktop bundle
 requirements live in [docs/desktop-bundles.md](./docs/desktop-bundles.md).
+CLI-only install and operations guidance lives in
+[docs/cli-operations.md](./docs/cli-operations.md).
 
 ## Current Status
 
@@ -45,7 +47,8 @@ cargo run -p blip-daemon
 ```
 
 For installed macOS and Linux users, manage the per-user daemon service through
-the CLI:
+the CLI. See [docs/cli-operations.md](./docs/cli-operations.md) for full
+install, config, logs, policy, and backup guidance.
 
 ```bash
 blip service install
