@@ -26,6 +26,7 @@ const sidebars = {
         'architecture/privacy-and-policy',
         'architecture/hosted-workspaces',
         'architecture/hosted-threat-model',
+        'architecture/hosted-sync-protocol',
         'architecture/storage-and-blobs',
         {
           type: 'category',
