@@ -12,6 +12,9 @@ use tempfile::tempdir;
 fn blip_command(db_path: &Path) -> Command {
     let mut cmd = Command::cargo_bin("blip").expect("binary should build");
     cmd.env("BLIPCOARD_DB_PATH", db_path);
+    if let Some(parent) = db_path.parent() {
+        cmd.env("BLIPCOARD_CONFIG_DIR", parent.join("config"));
+    }
     cmd
 }
 
@@ -701,6 +704,83 @@ fn health_reports_when_daemon_socket_is_unavailable() {
         .stderr(predicate::str::contains(
             "daemon is not running at the configured socket",
         ));
+}
+
+#[test]
+fn service_status_reports_missing_daemon_without_failing() {
+    let temp = tempdir().expect("tempdir should exist");
+    let db_path = temp.path().join("blipcoard-test.db");
+    let socket_path = temp.path().join("missing-daemon.sock");
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["service", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("service: blipd"))
+        .stdout(predicate::str::contains("daemon: not running"))
+        .stdout(predicate::str::contains(
+            "start command: blip service start",
+        ))
+        .stderr(predicate::str::is_empty());
+
+    let status = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["service", "status", "--output", "json"],
+    );
+    assert_eq!(status["service"], "blipd");
+    assert_eq!(status["daemon_running"], false);
+    assert!(
+        status["daemon_error"]
+            .as_str()
+            .expect("daemon error should be a string")
+            .contains("daemon is not running")
+    );
+    assert_eq!(status["socket_path"], socket_path.display().to_string());
+}
+
+#[test]
+fn service_status_reports_running_daemon_health() {
+    let temp = tempdir().expect("tempdir should exist");
+    let db_path = temp.path().join("blipcoard-test.db");
+    let socket_path = temp.path().join("blipcoard.sock");
+    let mut daemon = blip_daemon_command(&db_path, &socket_path)
+        .spawn()
+        .expect("daemon should start");
+    wait_for_socket(&socket_path);
+
+    let status = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["service", "status", "--output", "json"],
+    );
+    assert_eq!(status["service"], "blipd");
+    assert_eq!(status["daemon_running"], true);
+    assert_eq!(status["daemon_error"], Value::Null);
+    assert_eq!(status["database_path"], db_path.display().to_string());
+
+    stop_daemon(&mut daemon);
+}
+
+#[test]
+fn service_logs_and_plan_explain_platform_paths() {
+    let temp = tempdir().expect("tempdir should exist");
+    let db_path = temp.path().join("blipcoard-test.db");
+    let socket_path = temp.path().join("missing-daemon.sock");
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["service", "logs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("blipd"))
+        .stderr(predicate::str::is_empty());
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["service", "plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("service: blipd"))
+        .stdout(predicate::str::contains("manager:"))
+        .stdout(predicate::str::contains("socket:"))
+        .stderr(predicate::str::is_empty());
 }
 
 #[test]

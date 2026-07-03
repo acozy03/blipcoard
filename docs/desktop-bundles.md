@@ -19,8 +19,9 @@ The desktop bundle is a Tauri app under `apps/desktop/src-tauri`.
 
 The Tauri frontend uses command handlers in the Rust shell. Those handlers load
 the shared `blipcoard` config, talk to the configured daemon IPC socket, and try
-to start the bundled `blipd --ipc-only` sidecar when the socket is missing or
-stale. The desktop shell does not watch the clipboard directly.
+to start the bundled full `blipd` sidecar when the socket is missing or stale.
+The desktop shell does not watch the clipboard directly, and `--ipc-only` is
+reserved for tests and manual IPC checks.
 
 Current limit: Unix socket IPC is implemented for macOS and Linux. Windows
 bundles can be configured, but Windows runtime acceptance remains blocked until
@@ -48,6 +49,7 @@ Smoke checks:
 
 - Install the app on a clean user account.
 - Launch the desktop app and confirm it starts or connects to `blipd`.
+- Run `blip service status` and confirm the daemon is running.
 - Run `blip health` from the installed CLI and confirm it reaches the same
   daemon/store.
 - Copy text and verify the desktop inbox updates through daemon ingestion.
@@ -87,6 +89,7 @@ Smoke checks:
 - Launch the desktop app under both X11 and Wayland where available.
 - Confirm the desktop app starts or connects to `blipd` over the configured Unix
   socket.
+- Run `blip service status` and confirm the daemon is running.
 - Run `blip health` from the installed CLI and confirm it reaches the same
   daemon/store.
 - Copy text and verify the desktop inbox updates through daemon ingestion.
@@ -135,7 +138,10 @@ Planned smoke checks after Windows IPC lands:
   installed before building those formats.
 - Inspect bundle contents and confirm `blipd` and `blip` are included.
 - Confirm the desktop shell connects to the configured daemon socket.
-- Confirm launching desktop starts the bundled daemon when no daemon is running.
+- Confirm launching desktop starts the bundled full daemon when no daemon is
+  running.
+- Confirm `blip service status` and `blip service logs` report the expected
+  platform service/log details.
 - Confirm the CLI uses the same config and store as the desktop app.
 - Confirm uninstall behavior preserves config, SQLite, and `blobs/` by default.
 - Record platform, architecture, package format, signing state, and smoke-check
