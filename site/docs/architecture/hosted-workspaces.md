@@ -229,7 +229,8 @@ The next Phase 11 issues should decide:
 
 - the required security controls from the
   [Hosted workspace threat model](./hosted-threat-model.md)
-- hosted data model and event ordering
+- hosted data model and event ordering from the
+  [Hosted sync protocol](./hosted-sync-protocol.md)
 - join code entropy, expiry, revocation, and rate limits
 - hosted blob size limits and retention
 - deployment environments, cost model, backups, and incident procedures

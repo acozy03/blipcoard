@@ -29,6 +29,7 @@ Core product surfaces:
 - [Privacy and workspace policy](../architecture/privacy-and-policy.md)
 - [Hosted workspace architecture](../architecture/hosted-workspaces.md)
 - [Hosted workspace threat model](../architecture/hosted-threat-model.md)
+- [Hosted sync protocol](../architecture/hosted-sync-protocol.md)
 - [Storage and rich payload reliability](../architecture/storage-and-blobs.md)
 - [Daemon API reference](../reference/daemon-api.md)
 
