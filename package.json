@@ -6,6 +6,7 @@
     "docs:start": "npm --prefix site start",
     "docs:build": "npm --prefix site run build",
     "docs:serve": "npm --prefix site run serve",
+    "setup": "./scripts/setup-dev.sh",
     "hooks:install": "./scripts/setup-git-hooks.sh",
     "lint:pr-title": "commitlint",
     "lint:commits": "commitlint"

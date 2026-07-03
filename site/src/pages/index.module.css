@@ -1,5 +1,8 @@
 .main {
   min-height: calc(100vh - 60px);
+  background:
+    linear-gradient(180deg, var(--blip-blue-soft), transparent 340px),
+    var(--ifm-background-color);
 }
 
 .hero {
@@ -20,7 +23,7 @@
 .hero h1 {
   max-width: 760px;
   margin: 0;
-  font-size: clamp(2.4rem, 7vw, 5rem);
+  font-size: 4rem;
   line-height: 1;
 }
 
@@ -55,7 +58,7 @@
   border: 1px solid var(--ifm-color-emphasis-200);
   border-radius: 8px;
   color: inherit;
-  background: var(--ifm-card-background-color);
+  background: var(--blip-surface);
   text-decoration: none;
 }
 
@@ -89,5 +92,9 @@
 
   .grid {
     grid-template-columns: 1fr;
+  }
+
+  .hero h1 {
+    font-size: 2.4rem;
   }
 }

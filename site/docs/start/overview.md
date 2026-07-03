@@ -14,6 +14,7 @@ Core product surfaces:
 
 ## Start Here
 
+- [One-command setup](./setup.md)
 - [Product model](./product-model.md)
 - [CLI install and operations](../operations/cli-operations.md)
 - [CLI reference](../reference/cli.md)

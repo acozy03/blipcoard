@@ -19,9 +19,15 @@ Use `main` for production or release promotion work only.
 The repository uses conventional commit-style linting for PR titles and outgoing
 commit messages.
 
+Fast setup:
+
+```bash title="Clone and configure the repo"
+curl -fsSL https://raw.githubusercontent.com/blipcoard/blipcoard/develop/scripts/setup-dev.sh | bash -s -- --no-runtime --no-service
+```
+
 Install the repo hooks:
 
-```sh
+```bash npm2yarn title="Manual hook setup"
 npm install
 npm run hooks:install
 ```

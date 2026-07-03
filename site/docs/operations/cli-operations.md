@@ -12,6 +12,17 @@ CLI-only mode still includes both binaries:
 Do not run CLI-only mode as `blip` alone. Commands that read, route, preview, or
 export runtime data expect the daemon API.
 
+## Fast Path
+
+For a source checkout install that builds the repo, installs both runtime
+binaries, and starts the daemon service:
+
+```bash title="One-command source setup"
+curl -fsSL https://raw.githubusercontent.com/blipcoard/blipcoard/develop/scripts/setup-dev.sh | bash
+```
+
+See [One-command setup](../start/setup.md) for options.
+
 ## Install Binaries
 
 A supported CLI-only install places `blip` and `blipd` on the user's `PATH`.

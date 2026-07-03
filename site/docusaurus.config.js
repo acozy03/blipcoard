@@ -1,11 +1,12 @@
 // @ts-check
 import {themes as prismThemes} from 'prism-react-renderer';
+import npm2yarn from '@docusaurus/remark-plugin-npm2yarn';
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'blipcoard',
   tagline: 'Runtime-first clipboard routing for agent workflows',
-  favicon: 'img/favicon.ico',
+  favicon: 'img/logo.svg',
 
   future: {
     v4: true,
@@ -37,12 +38,27 @@ const config = {
           routeBasePath: 'docs',
           sidebarPath: './sidebars.js',
           editUrl: 'https://github.com/blipcoard/blipcoard/tree/develop/site/',
+          remarkPlugins: [[npm2yarn, {sync: true, converters: ['yarn', 'pnpm']}]],
         },
         blog: false,
         theme: {
           customCss: './src/css/custom.css',
         },
       }),
+    ],
+  ],
+
+  plugins: [
+    [
+      '@easyops-cn/docusaurus-search-local',
+      {
+        hashed: true,
+        indexDocs: true,
+        indexPages: true,
+        indexBlog: false,
+        language: ['en'],
+        docsRouteBasePath: '/docs',
+      },
     ],
   ],
 
@@ -66,6 +82,7 @@ const config = {
             position: 'left',
             label: 'Docs',
           },
+          {type: 'doc', docId: 'start/setup', label: 'Setup', position: 'left'},
           {type: 'doc', docId: 'start/product-model', label: 'Product', position: 'left'},
           {
             type: 'doc',
@@ -99,6 +116,7 @@ const config = {
             title: 'Docs',
             items: [
               {label: 'Overview', to: '/docs/start/overview'},
+              {label: 'One-command setup', to: '/docs/start/setup'},
               {label: 'Product model', to: '/docs/start/product-model'},
               {label: 'CLI operations', to: '/docs/operations/cli-operations'},
               {label: 'Troubleshooting', to: '/docs/reference/troubleshooting'},
@@ -129,7 +147,25 @@ const config = {
       },
       prism: {
         theme: prismThemes.github,
-        darkTheme: prismThemes.dracula,
+        darkTheme: prismThemes.vsDark,
+        additionalLanguages: ['bash', 'diff', 'powershell', 'rust', 'toml'],
+        magicComments: [
+          {
+            className: 'theme-code-block-highlighted-line',
+            line: 'highlight-next-line',
+            block: {start: 'highlight-start', end: 'highlight-end'},
+          },
+          {
+            className: 'code-block-error-line',
+            line: 'error-next-line',
+            block: {start: 'error-start', end: 'error-end'},
+          },
+          {
+            className: 'code-block-success-line',
+            line: 'success-next-line',
+            block: {start: 'success-start', end: 'success-end'},
+          },
+        ],
       },
     }),
 };
