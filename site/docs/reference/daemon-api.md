@@ -58,22 +58,25 @@ Errors should be typed with a stable code plus a human-readable message. Store
 errors, policy denials, missing resources, daemon startup failures, and
 unsupported clipboard payloads should remain distinguishable.
 
-## Initial Commands
+## Current Commands
 
-The first daemon API surface should cover the commands needed by Phase 3 CLI
-work and future desktop inspection:
+The current daemon API version is `1`.
+
+`DaemonCommand` values are serialized as snake_case strings:
 
 | Area | Commands |
 | --- | --- |
-| Health | daemon health, API version, store path |
-| Workspaces | list, create, activate, inspect active workspace |
-| Inbox and blips | list inbox, list workspace, inspect blip by id |
-| Routing | move a blip from inbox to workspace, route latest blip |
-| Audit | list recent audit events |
-| Clipboard runtime | report watcher status and unsupported clipboard capability notes |
+| Health/version | `health`, `version` |
+| Workspaces | `current_workspace`, `activate_workspace`, `set_sticky_capture`, `set_workspace_policy`, `list_workspaces` |
+| Blips | `list_blips`, `search_blips`, `get_blip` |
+| Payloads | `get_payload_metadata`, `get_payload_preview`, `export_payload` |
+| Audit | `list_audit_events` |
+| Routing | `route_blip`, `route_latest_inbox_blip` |
+| Agent reads | `agent_recent_blips`, `agent_search_blips`, `agent_bundle` |
 
-These commands should be added incrementally. A CLI command may keep using direct
-`blip-core` access only until the matching daemon command exists.
+Workspace creation still has a bootstrap/admin CLI path while the daemon API
+does not expose a create-workspace command. That path should not watch the
+clipboard and should move behind the daemon when the API grows.
 
 ## Policy-Sensitive Commands
 
@@ -152,6 +155,22 @@ Payload byte commands return typed errors for:
 - `unsupported_payload` when the payload has no retrievable preview or raw blob
   for the requested operation.
 - `payload_too_large` when the daemon refuses an oversized export.
+
+## Error Codes
+
+Daemon errors use stable snake_case codes:
+
+| Code | Meaning |
+| --- | --- |
+| `unsupported_api_version` | The client and daemon API versions are incompatible. |
+| `invalid_request` | The command or payload is malformed or invalid. |
+| `not_found` | A requested workspace, blip, payload, or other resource does not exist. |
+| `access_denied` | Workspace or payload policy denied the operation. |
+| `store_unavailable` | The daemon could not use the local store. |
+| `missing_blob` | Payload metadata exists but the referenced blob is missing. |
+| `unsupported_payload` | The payload cannot be previewed or exported for this operation. |
+| `payload_too_large` | The payload is too large for the requested operation. |
+| `internal` | Unexpected daemon failure. |
 
 Workspace policy changes use the daemon-mediated `set_workspace_policy` command,
 which records a `workspace_policy_changed` audit event and returns the updated

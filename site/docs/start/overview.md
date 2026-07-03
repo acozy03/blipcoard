@@ -14,21 +14,29 @@ Core product surfaces:
 
 ## Start Here
 
+- [Product model](./product-model.md)
 - [CLI install and operations](../operations/cli-operations.md)
+- [CLI reference](../reference/cli.md)
+- [Troubleshooting](../reference/troubleshooting.md)
 - [Runtime distribution model](../operations/runtime-distribution.md)
 - [Desktop bundle notes](../operations/desktop-bundles.md)
 - [Upgrade and migration strategy](../operations/upgrade-migrations.md)
 
 ## Architecture
 
+- [Runtime boundary](../architecture/runtime-boundary.md)
 - [Runtime model](../architecture/runtime-model.md)
+- [Privacy and workspace policy](../architecture/privacy-and-policy.md)
 - [Storage and rich payload reliability](../architecture/storage-and-blobs.md)
 - [Daemon API reference](../reference/daemon-api.md)
 
 ## Roadmap and Contribution
 
+- [Phase model](../roadmap/phase-model.md)
 - [MVP phases](../roadmap/mvp-phases.md)
 - [Project breakdown](../roadmap/project-breakdown.md)
+- [Development workflow](../contributor/development-workflow.md)
+- [Docs maintenance](../contributor/docs-maintenance.md)
 - [Repository layout](../contributor/repository-layout.md)
 - [Docs site architecture](../contributor/docs-site-architecture.md)
 

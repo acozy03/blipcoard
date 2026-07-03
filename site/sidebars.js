@@ -6,7 +6,7 @@ const sidebars = {
     {
       type: 'category',
       label: 'Start',
-      items: ['start/overview'],
+      items: ['start/overview', 'start/product-model'],
     },
     {
       type: 'category',
@@ -21,7 +21,9 @@ const sidebars = {
       type: 'category',
       label: 'Architecture',
       items: [
+        'architecture/runtime-boundary',
         'architecture/runtime-model',
+        'architecture/privacy-and-policy',
         'architecture/storage-and-blobs',
         {
           type: 'category',
@@ -42,17 +44,22 @@ const sidebars = {
     {
       type: 'category',
       label: 'Reference',
-      items: ['reference/daemon-api'],
+      items: ['reference/cli', 'reference/daemon-api', 'reference/troubleshooting'],
     },
     {
       type: 'category',
       label: 'Contributor',
-      items: ['contributor/repository-layout', 'contributor/docs-site-architecture'],
+      items: [
+        'contributor/development-workflow',
+        'contributor/docs-maintenance',
+        'contributor/repository-layout',
+        'contributor/docs-site-architecture',
+      ],
     },
     {
       type: 'category',
       label: 'Roadmap',
-      items: ['roadmap/mvp-phases', 'roadmap/project-breakdown'],
+      items: ['roadmap/phase-model', 'roadmap/mvp-phases', 'roadmap/project-breakdown'],
     },
   ],
 };
