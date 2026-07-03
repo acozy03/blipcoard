@@ -285,6 +285,8 @@ Deliverables:
 - CLI install docs
 - platform config, data, blob, IPC, log, first-run, and uninstall expectations
   in [runtime-distribution.md](./runtime-distribution.md)
+- desktop sidecar, signing, installer, package, update, and smoke-check
+  expectations in [desktop-bundles.md](./desktop-bundles.md)
 - upgrade strategy
 
 Packaging rule:

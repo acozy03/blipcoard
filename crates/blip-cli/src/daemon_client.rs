@@ -453,11 +453,11 @@ impl Display for DaemonClientError {
             ),
             Self::Io(error) if error.kind() == std::io::ErrorKind::NotFound => write!(
                 formatter,
-                "daemon is not running at the configured socket; start `blip-daemon --ipc-only` or the full daemon first"
+                "daemon is not running at the configured socket; start `blipd --ipc-only` or the full daemon first"
             ),
             Self::Io(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => write!(
                 formatter,
-                "daemon socket exists but no daemon accepted the connection; restart blip-daemon"
+                "daemon socket exists but no daemon accepted the connection; restart blipd"
             ),
             Self::Io(error) => write!(formatter, "daemon IPC io error: {error}"),
             Self::Serialization(error) => write!(formatter, "daemon IPC JSON error: {error}"),

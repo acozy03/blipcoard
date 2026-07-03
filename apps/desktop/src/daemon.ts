@@ -1,3 +1,5 @@
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+
 export type BlipSummary = {
   id: string;
   preview: string;
@@ -124,6 +126,7 @@ declare global {
     __TAURI__?: {
       core?: TauriCore;
     };
+    __TAURI_INTERNALS__?: unknown;
   }
 }
 
@@ -586,11 +589,15 @@ export async function routeLatestInboxBlip(workspace: string): Promise<BlipRoute
   };
 }
 
-function getInvoke() {
+function getInvoke(): TauriCore["invoke"] | null {
   const invoke = window.__TAURI__?.core?.invoke;
 
   if (invoke) {
     return invoke;
+  }
+
+  if (window.__TAURI_INTERNALS__) {
+    return tauriInvoke;
   }
 
   if (import.meta.env.DEV) {

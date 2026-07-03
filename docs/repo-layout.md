@@ -10,6 +10,7 @@ blipcoard/
     mvp-phases.md
     repo-layout.md
     runtime-distribution.md
+    desktop-bundles.md
   crates/
     blip-core/
     blip-daemon/
@@ -76,7 +77,7 @@ Current state:
 
 `apps/desktop` should contain:
 
-- Tauri shell
+- Tauri shell in `src-tauri/`
 - React frontend
 - workspace, inbox, audit, and settings screens
 

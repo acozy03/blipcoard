@@ -14,7 +14,8 @@ Core product surfaces:
 
 Start with the design docs in [docs/architecture.md](./docs/architecture.md),
 [docs/project-breakdown.md](./docs/project-breakdown.md), and
-[docs/runtime-distribution.md](./docs/runtime-distribution.md).
+[docs/runtime-distribution.md](./docs/runtime-distribution.md). Desktop bundle
+requirements live in [docs/desktop-bundles.md](./docs/desktop-bundles.md).
 
 ## Current Status
 

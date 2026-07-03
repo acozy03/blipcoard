@@ -106,9 +106,9 @@ Target startup behavior:
   also start or prompt to start the daemon if it is not running.
 - CLI-only install: installer registers an optional user service and documents
   foreground startup for terminal-only users.
-- Development checkout: `cargo run -p blip-daemon` starts the daemon runtime;
-  `cargo run -p blip-daemon -- --ipc-only` starts only the IPC server for tests
-  and manual client checks.
+- Development checkout: `cargo run -p blip-daemon` starts the `blipd` daemon
+  runtime; `cargo run -p blip-daemon -- --ipc-only` starts only the IPC server
+  for tests and manual client checks.
 
 The daemon remains the runtime owner in every mode. Desktop and CLI launchers
 must not silently fall back to direct clipboard watching.

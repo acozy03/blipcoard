@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "blipd"
+path = "src/main.rs"
+
 [dependencies]
 blip-api = { path = "../blip-api" }
 blip-clipboard = { path = "../blip-clipboard" }

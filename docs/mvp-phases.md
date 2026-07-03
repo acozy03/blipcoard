@@ -287,6 +287,16 @@ Phase 9.1 distribution model:
 - Windows packaging requires a user-scoped IPC implementation before Windows
   installs can satisfy the same daemon/client boundary as macOS and Linux
 
+Phase 9.2 desktop bundle behavior:
+
+- the desktop app is a Tauri bundle with `blipd` and `blip` sidecars
+- desktop command handlers use the daemon IPC boundary and may start the bundled
+  daemon sidecar when the configured socket is unavailable
+- platform signing, installer, package, update, and smoke-test expectations are
+  documented in [desktop-bundles.md](./desktop-bundles.md)
+- Windows desktop runtime acceptance remains blocked until Windows daemon IPC is
+  implemented
+
 ## Phase 10: Documentation site and public docs
 
 Goal:
