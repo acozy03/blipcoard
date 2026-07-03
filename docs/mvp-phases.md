@@ -160,6 +160,14 @@ Must have:
   rich payloads
 - migration path from text-only `Blip.content` records to typed payload records
 
+Storage notes:
+
+- blob bytes live beside SQLite as part of the same local store and must be
+  backed up, restored, and garbage-collected together with payload metadata
+- blob writes use atomic temp files and content hashes so failed writes recover
+  cleanly, duplicate bytes share one stored file, and deletion only removes bytes
+  after the final SQLite reference is gone
+
 Out of scope:
 
 - optical character recognition as an ingestion requirement

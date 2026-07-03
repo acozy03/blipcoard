@@ -44,6 +44,34 @@ columns; they will store metadata plus a local `blob_ref` once blob storage is
 implemented. List views can query payload kind, MIME type, byte size, preview
 reference, and blob reference without loading payload bytes.
 
+## Blob Storage Semantics
+
+Blob bytes live outside SQLite under a store-owned blob directory. The directory
+is content-addressed by payload hash, using a stable fan-out layout such as
+`blobs/sha256/ab/<full-hash>`, and `blob_ref` stores only the relative
+reference needed to find the file under the current store root. SQLite remains
+the source of truth for blip and payload metadata; the blob directory is part of
+the same local data store, not a cache.
+
+Backups must include both the SQLite database and the blob directory from the
+same store snapshot. Restores must put them back together under one store root;
+restoring only SQLite may leave payload rows whose blobs are missing, and
+restoring only blobs produces orphan files that are not visible to clients.
+
+Blob writes use an atomic temp-file flow: write bytes to a temporary file in the
+blob directory, fsync the file, atomically rename it into the hash-addressed
+path, then commit the SQLite row that references it. If the final blob path
+already exists with the expected size and hash, the writer reuses it. Startup or
+maintenance recovery may delete stale temp files and may either remove orphan
+final blobs or leave them for a later garbage-collection pass; it must not
+invent payload rows for orphan files.
+
+`content_hash` enables dedupe across payload rows. Multiple blips may reference
+the same blob path when their bytes are identical. Deleting a blip or payload
+removes the SQLite reference first; physical blob deletion happens only after no
+remaining payload references the same hash. Missing blobs should be surfaced as
+payload integrity errors rather than silently downgraded to text-only records.
+
 ## Migration
 
 Schema version 5 adds `blip_payloads` and backfills one text payload for every
