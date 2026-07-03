@@ -3,6 +3,9 @@
   "private": true,
   "packageManager": "npm@11.16.0",
   "scripts": {
+    "docs:start": "npm --prefix site start",
+    "docs:build": "npm --prefix site run build",
+    "docs:serve": "npm --prefix site run serve",
     "hooks:install": "./scripts/setup-git-hooks.sh",
     "lint:pr-title": "commitlint",
     "lint:commits": "commitlint"
