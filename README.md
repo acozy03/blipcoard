@@ -22,6 +22,7 @@ Upgrade and migration guidance lives in
 [docs/upgrade-migrations.md](./docs/upgrade-migrations.md).
 Documentation site architecture lives in
 [docs/docs-site-architecture.md](./docs/docs-site-architecture.md).
+The browsable documentation site source lives under [site/docs](./site/docs).
 
 ## Current Status
 
@@ -76,3 +77,8 @@ npm run hooks:install
 
 This enables the `.githooks/pre-push` hook, which lints outgoing commit messages,
 and the GitHub Actions PR title lint workflow enforces conventional PR titles.
+
+Contributor workflow and docs maintenance guidance live in
+[site/docs/contributor/development-workflow.md](./site/docs/contributor/development-workflow.md)
+and
+[site/docs/contributor/docs-maintenance.md](./site/docs/contributor/docs-maintenance.md).

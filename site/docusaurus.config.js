@@ -66,7 +66,7 @@ const config = {
             position: 'left',
             label: 'Docs',
           },
-          {type: 'doc', docId: 'start/overview', label: 'Product', position: 'left'},
+          {type: 'doc', docId: 'start/product-model', label: 'Product', position: 'left'},
           {
             type: 'doc',
             docId: 'architecture/runtime-model',
@@ -75,13 +75,13 @@ const config = {
           },
           {
             type: 'doc',
-            docId: 'reference/daemon-api',
+            docId: 'reference/cli',
             label: 'Reference',
             position: 'left',
           },
           {
             type: 'doc',
-            docId: 'contributor/repository-layout',
+            docId: 'contributor/development-workflow',
             label: 'Contribute',
             position: 'left',
           },
@@ -99,14 +99,18 @@ const config = {
             title: 'Docs',
             items: [
               {label: 'Overview', to: '/docs/start/overview'},
+              {label: 'Product model', to: '/docs/start/product-model'},
               {label: 'CLI operations', to: '/docs/operations/cli-operations'},
+              {label: 'Troubleshooting', to: '/docs/reference/troubleshooting'},
               {label: 'Upgrade and migrations', to: '/docs/operations/upgrade-migrations'},
             ],
           },
           {
             title: 'Reference',
             items: [
+              {label: 'Runtime boundary', to: '/docs/architecture/runtime-boundary'},
               {label: 'Architecture', to: '/docs/architecture/runtime-model'},
+              {label: 'CLI reference', to: '/docs/reference/cli'},
               {label: 'Daemon API', to: '/docs/reference/daemon-api'},
               {label: 'Roadmap', to: '/docs/roadmap/mvp-phases'},
             ],
