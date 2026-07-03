@@ -53,6 +53,10 @@ Hosted or self-hosted workspace sharing can be introduced after the local
 runtime is trustworthy. Shared sessions should send only user-selected blips by
 default, not automatically upload every clipboard event.
 
+The MVP hosted architecture keeps collaboration in the monorepo and preserves
+daemon-owned local capture. See
+[Hosted workspace architecture](../architecture/hosted-workspaces.md).
+
 ## Phase Invariants
 
 - Keep `blipd` as the only clipboard watcher.

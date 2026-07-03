@@ -27,6 +27,7 @@ Core product surfaces:
 - [Runtime boundary](../architecture/runtime-boundary.md)
 - [Runtime model](../architecture/runtime-model.md)
 - [Privacy and workspace policy](../architecture/privacy-and-policy.md)
+- [Hosted workspace architecture](../architecture/hosted-workspaces.md)
 - [Storage and rich payload reliability](../architecture/storage-and-blobs.md)
 - [Daemon API reference](../reference/daemon-api.md)
 
