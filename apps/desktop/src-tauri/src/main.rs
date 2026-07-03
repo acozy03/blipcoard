@@ -401,7 +401,6 @@ fn start_daemon_sidecar(app: &tauri::AppHandle) -> Result<(), DesktopError> {
         .sidecar("binaries/blipd")
         .map_err(|error| DesktopError::Sidecar(error.to_string()))?;
     sidecar
-        .args(["--ipc-only"])
         .spawn()
         .map_err(|error| DesktopError::Sidecar(error.to_string()))?;
     Ok(())

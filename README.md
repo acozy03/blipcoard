@@ -36,6 +36,28 @@ Today the workspace includes:
 Current work is defining the runtime-first distribution model so installs keep
 the daemon, CLI, desktop app, and local store ownership aligned.
 
+## Running the Daemon
+
+For a foreground development daemon:
+
+```bash
+cargo run -p blip-daemon
+```
+
+For installed macOS and Linux users, manage the per-user daemon service through
+the CLI:
+
+```bash
+blip service install
+blip service start
+blip service status
+blip service logs
+blip service uninstall
+```
+
+Windows service startup is intentionally unavailable until the Windows daemon IPC
+transport lands.
+
 ## Tooling
 
 Install the repo-local commitlint tooling and enable the checked-in git hooks:

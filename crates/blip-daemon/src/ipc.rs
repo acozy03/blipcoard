@@ -25,7 +25,7 @@ impl Display for IpcError {
             ),
             Self::AlreadyRunning { socket_path } => write!(
                 formatter,
-                "daemon IPC socket is already accepting connections at {}",
+                "blipd is already running at {}; use `blip service status` or `blip service restart`",
                 socket_path.display()
             ),
             Self::Io(error) => write!(formatter, "daemon IPC io error: {error}"),

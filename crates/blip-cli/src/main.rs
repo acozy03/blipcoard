@@ -1,4 +1,5 @@
 pub mod daemon_client;
+mod service;
 mod store_backend;
 
 use blip_api::{PayloadRequester, PayloadSummary, WorkspaceSummary};
@@ -6,6 +7,7 @@ use blip_config::BlipConfig;
 use blip_core::{BlipError, ContentType, NewBlip, NewWorkspace};
 use clap::{Parser, Subcommand, ValueEnum};
 use daemon_client::DaemonClient;
+use service::{ServicePlan, render_status_json};
 use std::io;
 use std::path::{Path, PathBuf};
 use store_backend::StoreCommandBackend;
@@ -118,6 +120,10 @@ enum Commands {
         #[command(subcommand)]
         command: PayloadCommands,
     },
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommands,
+    },
     AddDemo {
         workspace: String,
         content: String,
@@ -175,6 +181,27 @@ enum PayloadCommands {
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         output: OutputFormat,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceCommands {
+    Plan {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
+    Install {
+        #[arg(long)]
+        print: bool,
+    },
+    Uninstall,
+    Start,
+    Stop,
+    Restart,
+    Status {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
+    Logs,
 }
 
 fn main() {
@@ -415,6 +442,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 print_payload_export_result(&payload, &output_path, output)?;
             }
         },
+        Commands::Service { command } => {
+            let plan = ServicePlan::from_config(&config)?;
+            handle_service_command(command, &config, &plan)?;
+        }
         Commands::AddDemo {
             workspace,
             content,
@@ -432,6 +463,130 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 tags: vec!["demo".to_string()],
             })?;
             println!("created blip {}", blip.id);
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_service_command(
+    command: ServiceCommands,
+    config: &BlipConfig,
+    plan: &ServicePlan,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        ServiceCommands::Plan { output } => print_service_plan(plan, output),
+        ServiceCommands::Install { print } => {
+            if print {
+                print!("{}", plan.render_install_file()?);
+            } else {
+                plan.install()?;
+                println!("installed blipd service with {}", plan.manager.name());
+                if let Some(path) = &plan.service_file_path {
+                    println!("service file: {}", path.display());
+                }
+            }
+            Ok(())
+        }
+        ServiceCommands::Uninstall => {
+            plan.uninstall()?;
+            println!("uninstalled blipd service");
+            Ok(())
+        }
+        ServiceCommands::Start => {
+            plan.start()?;
+            println!("started blipd service");
+            Ok(())
+        }
+        ServiceCommands::Stop => {
+            plan.stop()?;
+            println!("stopped blipd service");
+            Ok(())
+        }
+        ServiceCommands::Restart => {
+            plan.restart()?;
+            println!("restarted blipd service");
+            Ok(())
+        }
+        ServiceCommands::Status { output } => print_service_status(config, plan, output),
+        ServiceCommands::Logs => {
+            println!("{}", plan.log_location);
+            Ok(())
+        }
+    }
+}
+
+fn print_service_plan(
+    plan: &ServicePlan,
+    output: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match output {
+        OutputFormat::Human => {
+            println!("service: blipd");
+            println!("manager: {}", plan.manager.name());
+            println!("service id: {}", plan.service_id);
+            if let Some(path) = &plan.service_file_path {
+                println!("service file: {}", path.display());
+            } else {
+                println!("service file: unsupported");
+            }
+            println!("blipd: {}", plan.blipd_path.display());
+            println!("config: {}", plan.config_path.display());
+            println!("database: {}", plan.database_path.display());
+            println!("socket: {}", plan.socket_path.display());
+            println!("logs: {}", plan.log_location);
+        }
+        OutputFormat::Json => {
+            serde_json::to_writer(
+                io::stdout().lock(),
+                &render_status_json(plan, false, Some("not checked")),
+            )?;
+            println!();
+        }
+    }
+
+    Ok(())
+}
+
+fn print_service_status(
+    config: &BlipConfig,
+    plan: &ServicePlan,
+    output: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let health_result = DaemonClient::from_config(config)?.health();
+    let daemon_running = health_result.is_ok();
+    let daemon_error = health_result.as_ref().err().map(ToString::to_string);
+
+    match output {
+        OutputFormat::Human => {
+            println!("service: blipd");
+            println!("manager: {}", plan.manager.name());
+            println!(
+                "daemon: {}",
+                if daemon_running {
+                    "running"
+                } else {
+                    "not running"
+                }
+            );
+            if let Ok(health) = health_result {
+                println!("database: {}", health.database_path);
+                let active_workspace = health.active_workspace.as_deref().unwrap_or("none");
+                println!("active workspace: {active_workspace}");
+                println!("generated at: {}", health.generated_at);
+            } else if let Some(error) = daemon_error.as_deref() {
+                println!("daemon error: {error}");
+                println!("start command: blip service start");
+            }
+            println!("socket: {}", plan.socket_path.display());
+            println!("logs: {}", plan.log_location);
+        }
+        OutputFormat::Json => {
+            serde_json::to_writer(
+                io::stdout().lock(),
+                &render_status_json(plan, daemon_running, daemon_error.as_deref()),
+            )?;
+            println!();
         }
     }
 

@@ -66,20 +66,45 @@ The current implementation uses `directories::ProjectDirs::from("com",
 Rich payload blobs are stored beside SQLite and must be backed up, restored,
 retained, and garbage-collected with the database.
 
+## Service Commands
+
+The `blip` CLI owns user-facing daemon lifecycle commands:
+
+```sh
+blip service plan
+blip service install
+blip service uninstall
+blip service start
+blip service stop
+blip service restart
+blip service status
+blip service logs
+```
+
+`blip service install` installs a per-user service. It does not install a
+privileged system service and it starts the full `blipd` runtime, never
+`blipd --ipc-only`. `blip service status --output json` reports service paths,
+the configured socket, and daemon health when IPC is reachable. `blip service
+logs` prints the platform log location or inspection command.
+
+`blipd --ipc-only` remains a test and manual IPC mode. Normal installs, desktop
+fallback startup, and CLI-managed services should start `blipd` without
+`--ipc-only` so clipboard ingestion remains daemon-owned.
+
 ## Logs
 
-Current binaries write operational messages to stdout or stderr. Phase 9 daemon
-install work should route service logs to the platform service manager:
+Service logs are platform-specific:
 
-- macOS: launchd-managed stdout/stderr or a per-user log location selected by
-  the launch agent.
-- Linux: systemd user journal for service installs; stderr for foreground
-  sessions.
-- Windows: Windows Event Log or a per-user log file chosen by the service
-  wrapper.
+- macOS: the LaunchAgent writes stdout and stderr to `logs/blipd.log` under the
+  configured data directory, next to `blipcoard.db`.
+- Linux: the systemd user unit writes to the user journal. Inspect with
+  `journalctl --user -u blipd`.
+- Windows: service startup remains blocked until Windows IPC exists. Future
+  Windows support should use Windows Event Log or a documented per-user log
+  file.
 
-Packaging must document the chosen log location once service startup behavior is
-implemented.
+Foreground `blipd` sessions continue to write operational messages to stdout or
+stderr.
 
 ## First Run
 
@@ -93,22 +118,32 @@ On first run:
    the store layer.
 6. The daemon starts IPC before clipboard ingestion in the full runtime path.
 
-CLI commands that require the daemon should show an actionable error when the
-configured daemon socket is missing or stale. Installers should start `blipd`
-for full installs and should provide a clear command or service entry for
-CLI-only installs.
+CLI commands that require the daemon show an actionable error when the
+configured daemon socket is missing or stale. If another daemon is already
+accepting connections at the configured socket, `blipd` exits with a message
+that points users to `blip service status` or `blip service restart`.
 
 ## Startup
 
-Target startup behavior:
+Concrete startup behavior:
 
-- Full desktop install: user login starts `blipd`; launching the desktop app may
-  also start or prompt to start the daemon if it is not running.
-- CLI-only install: installer registers an optional user service and documents
-  foreground startup for terminal-only users.
-- Development checkout: `cargo run -p blip-daemon` starts the `blipd` daemon
-  runtime; `cargo run -p blip-daemon -- --ipc-only` starts only the IPC server
-  for tests and manual client checks.
+- macOS: `blip service install` writes
+  `~/Library/LaunchAgents/com.acozy03.blipcoard.blipd.plist`. The LaunchAgent
+  runs at login and keeps `blipd` alive. `blip service start` bootstraps the
+  user LaunchAgent.
+- Linux: `blip service install` writes
+  `~/.config/systemd/user/blipd.service` and reloads the user manager.
+  The unit is enabled for login startup, and `blip service start` starts it for
+  the current session.
+- Windows: mutating `blip service` commands such as `install`, `start`, `stop`,
+  `restart`, and `uninstall` report that service startup is unavailable until
+  Windows daemon IPC is implemented. Informational commands such as `plan`,
+  `status`, and `logs` can still describe the configured paths and unsupported
+  state. Windows packaging must not claim runtime acceptance before the
+  named-pipe or equivalent current-user IPC work lands.
+- Development checkout: `cargo run -p blip-daemon` starts the full `blipd`
+  daemon runtime; `cargo run -p blip-daemon -- --ipc-only` starts only the IPC
+  server for tests and manual client checks.
 
 The daemon remains the runtime owner in every mode. Desktop and CLI launchers
 must not silently fall back to direct clipboard watching.
@@ -133,8 +168,8 @@ blob, and log data. Purge must never be the default uninstall behavior.
 ## Phase 9 Follow-Ups
 
 - Phase 9.2 should make desktop bundles include `blipd` and `blip`.
-- Phase 9.3 should implement platform service startup and document concrete log
-  locations.
+- Phase 9.3 implements macOS and Linux service startup and documents concrete
+  log locations. Windows remains blocked by the Windows IPC follow-up.
 - Phase 9.4 should turn the CLI-only mode into install and operations docs.
 - Phase 9.5 should define backup, upgrade, and migration checks around the
   config, SQLite database, and blob directory.
