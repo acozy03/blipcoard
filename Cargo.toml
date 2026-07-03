@@ -6,6 +6,7 @@ members = [
   "crates/blip-config",
   "crates/blip-core",
   "crates/blip-daemon",
+  "crates/blip-sync",
 ]
 resolver = "3"
 
