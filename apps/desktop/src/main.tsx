@@ -36,6 +36,7 @@ import {
 import "./styles.css";
 
 const DETAIL_TEXT_LIMIT = 12000;
+const AUTO_REFRESH_INTERVAL_MS = 1500;
 
 type WorkspaceState =
   | { status: "loading" }
@@ -80,6 +81,7 @@ function App() {
   });
   const [selectedWorkspace, setSelectedWorkspace] = React.useState<string | null>(null);
   const selectedWorkspaceRef = React.useRef<string | null>(null);
+  const selectedBlipIdRef = React.useRef<string | null>(null);
   const blipRequestRef = React.useRef(0);
   const detailRequestRef = React.useRef(0);
   const [blipState, setBlipState] = React.useState<BlipState>({ status: "idle" });
@@ -93,9 +95,14 @@ function App() {
     selectedWorkspaceRef.current = selectedWorkspace;
   }, [selectedWorkspace]);
 
+  React.useEffect(() => {
+    selectedBlipIdRef.current = selectedBlipId;
+  }, [selectedBlipId]);
+
   const loadDetail = React.useCallback((blipId: string) => {
     const requestId = detailRequestRef.current + 1;
     detailRequestRef.current = requestId;
+    selectedBlipIdRef.current = blipId;
     setSelectedBlipId(blipId);
     setDetailState({ status: "loading", blipId });
     getBlip(blipId)
@@ -114,31 +121,56 @@ function App() {
       });
   }, []);
 
-  const loadBlips = React.useCallback((workspace: string) => {
+  const loadBlips = React.useCallback((workspace: string, options: { silent?: boolean } = {}) => {
     const requestId = blipRequestRef.current + 1;
     blipRequestRef.current = requestId;
-    setBlipState({ status: "loading", workspace });
+    if (!options.silent) {
+      setBlipState({ status: "loading", workspace });
+    }
     listWorkspaceBlips(workspace)
       .then((response) => {
+        if (selectedWorkspaceRef.current !== workspace) {
+          return;
+        }
+
         if (blipRequestRef.current === requestId) {
           setBlipState({ status: "ready", workspace: response.workspace, blips: response.blips });
+          const currentSelection = selectedBlipIdRef.current;
+          const selectedStillExists =
+            currentSelection &&
+            response.blips.some((blip) => blip.id === currentSelection);
+
+          if (selectedStillExists) {
+            return;
+          }
+
           const firstBlip = response.blips[0] ?? null;
 
           if (firstBlip) {
             loadDetail(firstBlip.id);
           } else {
+            selectedBlipIdRef.current = null;
             setSelectedBlipId(null);
             setDetailState({ status: "idle" });
           }
         }
       })
       .catch((error: unknown) => {
+        if (selectedWorkspaceRef.current !== workspace) {
+          return;
+        }
+
         if (blipRequestRef.current !== requestId) {
+          return;
+        }
+
+        if (options.silent) {
           return;
         }
 
         const message = error instanceof Error ? error.message : "Unable to load workspace";
         setBlipState({ status: "error", workspace, message });
+        selectedBlipIdRef.current = null;
         setSelectedBlipId(null);
         setDetailState({ status: "idle" });
       });
@@ -181,6 +213,7 @@ function App() {
             : null;
         const nextSelection = existingSelection ?? activeWorkspace ?? workspaces[0]?.name ?? null;
 
+        selectedWorkspaceRef.current = nextSelection;
         setWorkspaceState({ status: "ready", workspaces, activeWorkspace });
         setSelectedWorkspace(nextSelection);
 
@@ -188,6 +221,7 @@ function App() {
           loadBlips(nextSelection);
         } else {
           setBlipState({ status: "idle" });
+          selectedBlipIdRef.current = null;
           setSelectedBlipId(null);
           setDetailState({ status: "idle" });
         }
@@ -196,6 +230,7 @@ function App() {
         const message = error instanceof Error ? error.message : "Unable to load workspaces";
         setWorkspaceState({ status: "error", message });
         setBlipState({ status: "idle" });
+        selectedBlipIdRef.current = null;
         setSelectedBlipId(null);
         setDetailState({ status: "idle" });
       });
@@ -205,8 +240,25 @@ function App() {
     refresh();
   }, [refresh]);
 
+  React.useEffect(() => {
+    if (!selectedWorkspace) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      const workspace = selectedWorkspaceRef.current;
+      if (workspace) {
+        loadBlips(workspace, { silent: true });
+      }
+    }, AUTO_REFRESH_INTERVAL_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [loadBlips, selectedWorkspace]);
+
   const selectWorkspace = (workspace: string) => {
+    selectedWorkspaceRef.current = workspace;
     setSelectedWorkspace(workspace);
+    selectedBlipIdRef.current = null;
     setSelectedBlipId(null);
     setDetailState({ status: "idle" });
     loadBlips(workspace);
