@@ -13,9 +13,11 @@ use blip_api::{
     DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
     DaemonVersionResponse, HealthResponse, WorkspaceListResponse, WorkspaceSummary,
 };
-use blip_clipboard::{ClipboardError, ClipboardWatcher};
+use blip_clipboard::{ClipboardError, ClipboardImage, ClipboardPayload, ClipboardWatcher};
 use blip_core::{AuditEvent, Blip};
-use blip_core::{BlipError, BlipStore, ContentType, NewBlip};
+use blip_core::{
+    BlipError, BlipStore, ContentType, LocalBlobStore, NewBlip, NewClipboardPayload, PayloadKind,
+};
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -391,6 +393,9 @@ where
                 RuntimeEvent::ClipboardTextChanged { text } => {
                     self.ingest_clipboard_text(text)?;
                 }
+                RuntimeEvent::ClipboardImageChanged { image } => {
+                    self.ingest_clipboard_image(image)?;
+                }
                 RuntimeEvent::Shutdown => return Ok(()),
             }
         }
@@ -422,6 +427,54 @@ where
             .record_ingested(text, observed_at);
 
         Ok(())
+    }
+
+    fn ingest_clipboard_image(&mut self, image: ClipboardImage) -> Result<(), DaemonError> {
+        let workspace_name = self
+            .store
+            .get_sticky_workspace()?
+            .unwrap_or_else(|| INBOX_WORKSPACE.to_owned());
+        let content = format!(
+            "Image clipboard payload: {}x{} {} ({} bytes)",
+            image.width, image.height, image.mime_type, image.byte_size
+        );
+        let blip = self.store.insert_blip(&NewBlip {
+            workspace_name,
+            source_app: None,
+            content_type: ContentType::PlainText,
+            language: None,
+            content,
+            token_estimate: None,
+            is_redacted: false,
+            tags: vec!["clipboard:image".to_owned(), "rich:clipboard".to_owned()],
+        })?;
+
+        let blob_store = LocalBlobStore::new(self.blob_data_dir());
+        self.store.insert_blob_payload(
+            &blip.id,
+            &NewClipboardPayload {
+                kind: PayloadKind::Image,
+                mime_type: Some(image.mime_type),
+                platform_format: image.platform_format,
+                source_app: None,
+                preview_ref: None,
+                inline_text: None,
+                metadata: serde_json::json!({
+                    "width": image.width,
+                    "height": image.height,
+                }),
+                bytes: image.bytes,
+            },
+            &blob_store,
+        )?;
+
+        Ok(())
+    }
+
+    fn blob_data_dir(&self) -> PathBuf {
+        self.database_path
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
     }
 }
 
@@ -662,6 +715,7 @@ pub trait IngestionSource {
 pub enum RuntimeEvent {
     Idle,
     ClipboardTextChanged { text: String },
+    ClipboardImageChanged { image: ClipboardImage },
     Shutdown,
 }
 
@@ -720,7 +774,10 @@ where
             return Ok(RuntimeEvent::Idle);
         };
 
-        Ok(RuntimeEvent::ClipboardTextChanged { text: event.text })
+        match event.payload {
+            ClipboardPayload::Text(text) => Ok(RuntimeEvent::ClipboardTextChanged { text }),
+            ClipboardPayload::Image(image) => Ok(RuntimeEvent::ClipboardImageChanged { image }),
+        }
     }
 }
 
@@ -1660,9 +1717,7 @@ mod tests {
     #[test]
     fn clipboard_source_maps_watcher_events_to_runtime_events() {
         let watcher = ScriptedClipboardWatcher {
-            events: vec![Some(ClipboardEvent {
-                text: "copied text".to_owned(),
-            })],
+            events: vec![Some(ClipboardEvent::text("copied text"))],
         };
         let mut source = ClipboardIngestionSource::new(watcher, Duration::ZERO);
 
@@ -1673,6 +1728,22 @@ mod tests {
             RuntimeEvent::ClipboardTextChanged {
                 text: "copied text".to_owned(),
             }
+        );
+    }
+
+    #[test]
+    fn clipboard_source_maps_image_events_to_runtime_events() {
+        let image = sample_clipboard_image();
+        let watcher = ScriptedClipboardWatcher {
+            events: vec![Some(ClipboardEvent::image(image.clone()))],
+        };
+        let mut source = ClipboardIngestionSource::new(watcher, Duration::ZERO);
+
+        assert_eq!(
+            source
+                .wait_for_next()
+                .expect("clipboard source should poll watcher"),
+            RuntimeEvent::ClipboardImageChanged { image }
         );
     }
 
@@ -1709,6 +1780,64 @@ mod tests {
                 && event.target_blip_id.as_deref() == Some(blips[0].id.as_str())
                 && event.target_workspace.as_deref() == Some("inbox")
         }));
+    }
+
+    #[test]
+    fn runtime_persists_clipboard_image_events_with_blob_payload() {
+        let root = unique_temp_dir("blipcoard-image");
+        std::fs::create_dir_all(&root).expect("temp root should create");
+        let db_path = root.join("blipcoard.db");
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let source = ScriptedIngestionSource {
+            events: vec![
+                RuntimeEvent::Shutdown,
+                RuntimeEvent::ClipboardImageChanged {
+                    image: sample_clipboard_image(),
+                },
+            ],
+            calls: 0,
+        };
+        let mut runtime = DaemonRuntime::new(&db_path, store, source);
+
+        runtime
+            .run()
+            .expect("runtime should ingest clipboard image");
+
+        let blips = runtime
+            .store
+            .list_blips("inbox")
+            .expect("inbox blips should be listed");
+        assert_eq!(blips.len(), 1);
+        assert!(blips[0].content.contains("Image clipboard payload"));
+        assert!(blips[0].tags.contains(&"clipboard:image".to_owned()));
+
+        let payloads = runtime
+            .store
+            .get_blip_payloads(&blips[0].id)
+            .expect("payloads should list");
+        let image_payload = payloads
+            .iter()
+            .find(|payload| payload.kind == PayloadKind::Image)
+            .expect("image payload should be stored");
+        assert_eq!(image_payload.mime_type.as_deref(), Some("image/png"));
+        assert_eq!(image_payload.byte_size, 8);
+        assert_eq!(image_payload.metadata["width"], 1);
+        assert_eq!(image_payload.metadata["height"], 1);
+        assert!(image_payload.blob_ref.is_some());
+
+        let blob_store = LocalBlobStore::new(&root);
+        assert!(
+            blob_store
+                .exists(
+                    image_payload
+                        .blob_ref
+                        .as_deref()
+                        .expect("blob ref should exist")
+                )
+                .expect("blob existence should be readable")
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1914,6 +2043,25 @@ mod tests {
             })
             .expect("workspace should be created");
         store
+    }
+
+    fn sample_clipboard_image() -> ClipboardImage {
+        ClipboardImage {
+            bytes: vec![137, 80, 78, 71, 1, 2, 3, 4],
+            mime_type: "image/png".to_owned(),
+            width: 1,
+            height: 1,
+            byte_size: 8,
+            platform_format: Some("test:image".to_owned()),
+        }
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
     }
 
     fn insert_test_blip(store: &mut BlipStore, workspace: &str, content: &str) -> blip_core::Blip {

@@ -168,6 +168,16 @@ Storage notes:
   cleanly, duplicate bytes share one stored file, and deletion only removes bytes
   after the final SQLite reference is gone
 
+Phase 8.3 platform image behavior:
+
+- image clipboard readers normalize MIME type, width, height, byte size, and
+  original platform format before persistence
+- macOS support accounts for pasteboard image types; Linux support reports X11,
+  Wayland, permission, and headless limitations; Windows support accounts for
+  PNG and bitmap/DIB clipboard sources
+- unsupported image formats and unavailable clipboard runtimes produce typed
+  errors instead of being downgraded to text or hidden as empty clipboard data
+
 Out of scope:
 
 - optical character recognition as an ingestion requirement

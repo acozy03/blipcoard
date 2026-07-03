@@ -1,8 +1,16 @@
+use arboard::{Clipboard, Error as ArboardError, ImageData};
+use image::ImageEncoder;
+use image::codecs::png::PngEncoder;
+use image::{ColorType, ExtendedColorType};
+use std::collections::hash_map::DefaultHasher;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::time::Duration;
 use thiserror::Error;
 
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const DEFAULT_MAX_IMAGE_BYTES: usize = 50 * 1024 * 1024;
+const NORMALIZED_IMAGE_MIME_TYPE: &str = "image/png";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardPlatform {
@@ -29,20 +37,75 @@ impl fmt::Display for ClipboardPlatform {
 pub struct ClipboardWatcherConfig {
     /// Delay between polls for polling-based watchers.
     pub poll_interval: Duration,
+    /// Maximum decoded image byte size accepted before PNG normalization.
+    pub max_image_bytes: usize,
 }
 
 impl Default for ClipboardWatcherConfig {
     fn default() -> Self {
         Self {
             poll_interval: DEFAULT_POLL_INTERVAL,
+            max_image_bytes: DEFAULT_MAX_IMAGE_BYTES,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardEvent {
-    /// Text observed from the clipboard.
-    pub text: String,
+    pub payload: ClipboardPayload,
+}
+
+impl ClipboardEvent {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            payload: ClipboardPayload::Text(text.into()),
+        }
+    }
+
+    pub fn image(image: ClipboardImage) -> Self {
+        Self {
+            payload: ClipboardPayload::Image(image),
+        }
+    }
+
+    pub fn text_payload(&self) -> Option<&str> {
+        match &self.payload {
+            ClipboardPayload::Text(text) => Some(text.as_str()),
+            ClipboardPayload::Image(_) => None,
+        }
+    }
+
+    pub fn image_payload(&self) -> Option<&ClipboardImage> {
+        match &self.payload {
+            ClipboardPayload::Text(_) => None,
+            ClipboardPayload::Image(image) => Some(image),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardPayload {
+    Text(String),
+    Image(ClipboardImage),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardImage {
+    /// Normalized image bytes. Images are normalized to PNG for local storage.
+    pub bytes: Vec<u8>,
+    pub mime_type: String,
+    pub width: u32,
+    pub height: u32,
+    pub byte_size: usize,
+    pub platform_format: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardCapabilities {
+    pub platform: ClipboardPlatform,
+    pub text: bool,
+    pub image: bool,
+    pub image_formats: Vec<&'static str>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -55,6 +118,22 @@ pub enum ClipboardError {
         platform: ClipboardPlatform,
         reason: &'static str,
     },
+
+    #[error("clipboard is temporarily occupied on {platform}")]
+    Occupied { platform: ClipboardPlatform },
+
+    #[error("clipboard {payload_kind} payload is not supported on {platform}: {reason}")]
+    Unsupported {
+        platform: ClipboardPlatform,
+        payload_kind: &'static str,
+        reason: &'static str,
+    },
+
+    #[error("clipboard backend error on {platform}: {message}")]
+    Backend {
+        platform: ClipboardPlatform,
+        message: String,
+    },
 }
 
 pub trait ClipboardReader {
@@ -63,6 +142,17 @@ pub trait ClipboardReader {
     /// `Ok(None)` means the clipboard currently has no readable text, such as
     /// after being cleared or when it contains non-text content.
     fn read_text(&mut self) -> Result<Option<String>, ClipboardError>;
+
+    /// Reads the current clipboard image payload.
+    ///
+    /// `Ok(None)` means the clipboard currently has no readable image.
+    fn read_image(&mut self) -> Result<Option<ClipboardImage>, ClipboardError> {
+        Ok(None)
+    }
+
+    fn capabilities(&self) -> ClipboardCapabilities {
+        platform_capabilities(current_platform())
+    }
 }
 
 pub trait ClipboardWatcher {
@@ -80,7 +170,7 @@ pub trait ClipboardWatcher {
 pub struct PollingClipboardWatcher<R> {
     reader: R,
     poll_interval: Duration,
-    last_text: Option<String>,
+    last_payload: Option<ClipboardPayloadFingerprint>,
 }
 
 impl<R> PollingClipboardWatcher<R>
@@ -91,7 +181,7 @@ where
         Self {
             reader,
             poll_interval: config.poll_interval,
-            last_text: None,
+            last_payload: None,
         }
     }
 
@@ -105,17 +195,56 @@ where
     R: ClipboardReader,
 {
     fn poll_next(&mut self) -> Result<Option<ClipboardEvent>, ClipboardError> {
-        let Some(text) = self.reader.read_text()? else {
-            self.last_text = None;
-            return Ok(None);
-        };
+        if let Some(text) = self.reader.read_text()? {
+            let fingerprint = ClipboardPayloadFingerprint::text(&text);
+            if self.last_payload.as_ref() == Some(&fingerprint) {
+                return Ok(None);
+            }
 
-        if self.last_text.as_ref() == Some(&text) {
-            return Ok(None);
+            self.last_payload = Some(fingerprint);
+            return Ok(Some(ClipboardEvent::text(text)));
         }
 
-        self.last_text = Some(text.clone());
-        Ok(Some(ClipboardEvent { text }))
+        if let Some(image) = self.reader.read_image()? {
+            let fingerprint = ClipboardPayloadFingerprint::image(&image);
+            if self.last_payload.as_ref() == Some(&fingerprint) {
+                return Ok(None);
+            }
+
+            self.last_payload = Some(fingerprint);
+            return Ok(Some(ClipboardEvent::image(image)));
+        }
+
+        self.last_payload = None;
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClipboardPayloadFingerprint {
+    Text(String),
+    Image {
+        width: u32,
+        height: u32,
+        byte_size: usize,
+        content_hash: u64,
+    },
+}
+
+impl ClipboardPayloadFingerprint {
+    fn text(text: &str) -> Self {
+        Self::Text(text.to_owned())
+    }
+
+    fn image(image: &ClipboardImage) -> Self {
+        let mut hasher = DefaultHasher::new();
+        image.bytes.hash(&mut hasher);
+        Self::Image {
+            width: image.width,
+            height: image.height,
+            byte_size: image.byte_size,
+            content_hash: hasher.finish(),
+        }
     }
 }
 
@@ -131,65 +260,220 @@ pub fn current_platform() -> ClipboardPlatform {
     }
 }
 
+pub fn clipboard_capabilities() -> ClipboardCapabilities {
+    platform_capabilities(current_platform())
+}
+
+pub fn platform_capabilities(platform: ClipboardPlatform) -> ClipboardCapabilities {
+    match platform {
+        ClipboardPlatform::Linux => ClipboardCapabilities {
+            platform,
+            text: true,
+            image: true,
+            image_formats: vec!["image/png", "image/bmp", "image/tiff"],
+        },
+        ClipboardPlatform::MacOs => ClipboardCapabilities {
+            platform,
+            text: true,
+            image: true,
+            image_formats: vec!["public.png", "public.tiff", "NSImage"],
+        },
+        ClipboardPlatform::Windows => ClipboardCapabilities {
+            platform,
+            text: true,
+            image: true,
+            image_formats: vec!["CF_DIB", "CF_BITMAP", "PNG"],
+        },
+        ClipboardPlatform::Unknown => ClipboardCapabilities {
+            platform,
+            text: false,
+            image: false,
+            image_formats: Vec::new(),
+        },
+    }
+}
+
 pub fn system_watcher(
     config: ClipboardWatcherConfig,
 ) -> Result<impl ClipboardWatcher, ClipboardError> {
     Ok(PollingClipboardWatcher::new(
-        PlatformClipboardReader::new()?,
+        PlatformClipboardReader::with_config(config.clone())?,
         config,
     ))
 }
 
-#[derive(Debug)]
-struct PlatformClipboardReader;
+pub struct PlatformClipboardReader {
+    clipboard: Clipboard,
+    platform: ClipboardPlatform,
+    max_image_bytes: usize,
+}
 
 impl PlatformClipboardReader {
-    fn new() -> Result<Self, ClipboardError> {
-        Err(platform_unavailable_error())
+    pub fn new() -> Result<Self, ClipboardError> {
+        Self::with_config(ClipboardWatcherConfig::default())
+    }
+
+    pub fn with_config(config: ClipboardWatcherConfig) -> Result<Self, ClipboardError> {
+        let platform = current_platform();
+        let clipboard = Clipboard::new().map_err(|error| map_arboard_error(error, platform))?;
+        Ok(Self {
+            clipboard,
+            platform,
+            max_image_bytes: config.max_image_bytes,
+        })
     }
 }
 
 impl ClipboardReader for PlatformClipboardReader {
     fn read_text(&mut self) -> Result<Option<String>, ClipboardError> {
-        Err(platform_unavailable_error())
+        match self.clipboard.get_text() {
+            Ok(text) => Ok(Some(text)),
+            Err(ArboardError::ContentNotAvailable) => Ok(None),
+            Err(error) => Err(map_arboard_error(error, self.platform)),
+        }
+    }
+
+    fn read_image(&mut self) -> Result<Option<ClipboardImage>, ClipboardError> {
+        let image = match self.clipboard.get_image() {
+            Ok(image) => image,
+            Err(ArboardError::ContentNotAvailable) => return Ok(None),
+            Err(error) => return Err(map_arboard_error(error, self.platform)),
+        };
+
+        if image.bytes.len() > self.max_image_bytes {
+            return Err(ClipboardError::Unsupported {
+                platform: self.platform,
+                payload_kind: "image",
+                reason: "decoded image exceeds configured byte limit",
+            });
+        }
+
+        normalize_image(image, self.platform).map(Some)
+    }
+
+    fn capabilities(&self) -> ClipboardCapabilities {
+        platform_capabilities(self.platform)
     }
 }
 
-fn platform_unavailable_error() -> ClipboardError {
-    ClipboardError::Unavailable {
-        platform: current_platform(),
-        reason: platform_unavailable_reason(),
+fn normalize_image(
+    image: ImageData<'_>,
+    platform: ClipboardPlatform,
+) -> Result<ClipboardImage, ClipboardError> {
+    let expected_len = image
+        .width
+        .checked_mul(image.height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or(ClipboardError::Unsupported {
+            platform,
+            payload_kind: "image",
+            reason: "image dimensions overflow byte-size calculation",
+        })?;
+
+    if image.bytes.len() != expected_len {
+        return Err(ClipboardError::Unsupported {
+            platform,
+            payload_kind: "image",
+            reason: "decoded image is not RGBA8",
+        });
+    }
+
+    let width = u32::try_from(image.width).map_err(|_| ClipboardError::Unsupported {
+        platform,
+        payload_kind: "image",
+        reason: "image width exceeds supported range",
+    })?;
+    let height = u32::try_from(image.height).map_err(|_| ClipboardError::Unsupported {
+        platform,
+        payload_kind: "image",
+        reason: "image height exceeds supported range",
+    })?;
+
+    let mut bytes = Vec::new();
+    let encoder = PngEncoder::new(&mut bytes);
+    encoder
+        .write_image(
+            image.bytes.as_ref(),
+            width,
+            height,
+            ExtendedColorType::from(ColorType::Rgba8),
+        )
+        .map_err(|_| ClipboardError::Unsupported {
+            platform,
+            payload_kind: "image",
+            reason: "image could not be normalized to PNG",
+        })?;
+
+    let byte_size = bytes.len();
+    Ok(ClipboardImage {
+        bytes,
+        mime_type: NORMALIZED_IMAGE_MIME_TYPE.to_owned(),
+        width,
+        height,
+        byte_size,
+        platform_format: Some(platform_image_format(platform).to_owned()),
+    })
+}
+
+fn map_arboard_error(error: ArboardError, platform: ClipboardPlatform) -> ClipboardError {
+    match error {
+        ArboardError::ContentNotAvailable => ClipboardError::Unsupported {
+            platform,
+            payload_kind: "clipboard",
+            reason: "requested clipboard content is not available",
+        },
+        ArboardError::ClipboardNotSupported => ClipboardError::Unavailable {
+            platform,
+            reason: platform_unavailable_reason(platform),
+        },
+        ArboardError::ClipboardOccupied => ClipboardError::Occupied { platform },
+        ArboardError::ConversionFailure => ClipboardError::Unsupported {
+            platform,
+            payload_kind: "clipboard",
+            reason: "platform clipboard content could not be converted",
+        },
+        ArboardError::Unknown { description } => ClipboardError::Backend {
+            platform,
+            message: description,
+        },
+        error => ClipboardError::Backend {
+            platform,
+            message: error.to_string(),
+        },
     }
 }
 
-#[cfg(target_os = "linux")]
-fn platform_unavailable_reason() -> &'static str {
-    "x11/wayland clipboard reader is not implemented yet"
+fn platform_unavailable_reason(platform: ClipboardPlatform) -> &'static str {
+    match platform {
+        ClipboardPlatform::Linux => {
+            "x11/wayland clipboard reader is unavailable in the current environment"
+        }
+        ClipboardPlatform::MacOs => "pasteboard clipboard reader is unavailable",
+        ClipboardPlatform::Windows => "win32 clipboard reader is unavailable",
+        ClipboardPlatform::Unknown => "this target does not have a supported clipboard backend",
+    }
 }
 
-#[cfg(target_os = "macos")]
-fn platform_unavailable_reason() -> &'static str {
-    "pasteboard clipboard reader is not implemented yet"
-}
-
-#[cfg(target_os = "windows")]
-fn platform_unavailable_reason() -> &'static str {
-    "win32 clipboard reader is not implemented yet"
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn platform_unavailable_reason() -> &'static str {
-    "this target does not have a supported clipboard backend"
+fn platform_image_format(platform: ClipboardPlatform) -> &'static str {
+    match platform {
+        ClipboardPlatform::Linux => "arboard:image/png-or-decoded-rgba",
+        ClipboardPlatform::MacOs => "arboard:NSImage-decoded-rgba",
+        ClipboardPlatform::Windows => "arboard:CF_DIB-CF_BITMAP-PNG-decoded-rgba",
+        ClipboardPlatform::Unknown => "arboard:decoded-rgba",
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
 
     #[derive(Debug)]
     struct StubClipboardReader {
         reads: Vec<Option<&'static str>>,
+        images: Vec<Option<ClipboardImage>>,
         index: usize,
+        image_index: usize,
     }
 
     impl ClipboardReader for StubClipboardReader {
@@ -198,28 +482,32 @@ mod tests {
             self.index += 1;
             Ok(value.map(std::string::ToString::to_string))
         }
+
+        fn read_image(&mut self) -> Result<Option<ClipboardImage>, ClipboardError> {
+            let value = self.images.get(self.image_index).cloned().flatten();
+            self.image_index += 1;
+            Ok(value)
+        }
     }
 
     #[test]
     fn polling_watcher_emits_only_when_text_changes() {
         let reader = StubClipboardReader {
             reads: vec![Some("first"), Some("first"), Some("second"), None],
+            images: vec![None, None, None, None],
             index: 0,
+            image_index: 0,
         };
         let mut watcher = PollingClipboardWatcher::new(reader, ClipboardWatcherConfig::default());
 
         assert_eq!(
             watcher.poll_next().expect("poll should succeed"),
-            Some(ClipboardEvent {
-                text: "first".to_string(),
-            })
+            Some(ClipboardEvent::text("first"))
         );
         assert_eq!(watcher.poll_next().expect("poll should succeed"), None);
         assert_eq!(
             watcher.poll_next().expect("poll should succeed"),
-            Some(ClipboardEvent {
-                text: "second".to_string(),
-            })
+            Some(ClipboardEvent::text("second"))
         );
         assert_eq!(watcher.poll_next().expect("poll should succeed"), None);
     }
@@ -228,22 +516,65 @@ mod tests {
     fn polling_watcher_treats_absent_text_as_state_change() {
         let reader = StubClipboardReader {
             reads: vec![Some("first"), None, Some("first")],
+            images: vec![None, None, None],
             index: 0,
+            image_index: 0,
         };
         let mut watcher = PollingClipboardWatcher::new(reader, ClipboardWatcherConfig::default());
 
         assert_eq!(
             watcher.poll_next().expect("poll should succeed"),
-            Some(ClipboardEvent {
-                text: "first".to_string(),
-            })
+            Some(ClipboardEvent::text("first"))
         );
         assert_eq!(watcher.poll_next().expect("poll should succeed"), None);
         assert_eq!(
             watcher.poll_next().expect("poll should succeed"),
-            Some(ClipboardEvent {
-                text: "first".to_string(),
-            })
+            Some(ClipboardEvent::text("first"))
+        );
+    }
+
+    #[test]
+    fn polling_watcher_preserves_text_when_text_and_image_are_available() {
+        let image = sample_clipboard_image();
+        let reader = StubClipboardReader {
+            reads: vec![Some("fallback text")],
+            images: vec![Some(image.clone())],
+            index: 0,
+            image_index: 0,
+        };
+        let mut watcher = PollingClipboardWatcher::new(reader, ClipboardWatcherConfig::default());
+
+        assert_eq!(
+            watcher.poll_next().expect("poll should succeed"),
+            Some(ClipboardEvent::text("fallback text"))
+        );
+    }
+
+    #[test]
+    fn polling_watcher_suppresses_duplicate_images_and_resets_on_none() {
+        let image = sample_clipboard_image();
+        let reader = StubClipboardReader {
+            reads: vec![None, None, None, None],
+            images: vec![
+                Some(image.clone()),
+                Some(image.clone()),
+                None,
+                Some(image.clone()),
+            ],
+            index: 0,
+            image_index: 0,
+        };
+        let mut watcher = PollingClipboardWatcher::new(reader, ClipboardWatcherConfig::default());
+
+        assert_eq!(
+            watcher.poll_next().expect("poll should succeed"),
+            Some(ClipboardEvent::image(image.clone()))
+        );
+        assert_eq!(watcher.poll_next().expect("poll should succeed"), None);
+        assert_eq!(watcher.poll_next().expect("poll should succeed"), None);
+        assert_eq!(
+            watcher.poll_next().expect("poll should succeed"),
+            Some(ClipboardEvent::image(image))
         );
     }
 
@@ -252,10 +583,13 @@ mod tests {
         let watcher = PollingClipboardWatcher::new(
             StubClipboardReader {
                 reads: vec![None],
+                images: vec![None],
                 index: 0,
+                image_index: 0,
             },
             ClipboardWatcherConfig {
                 poll_interval: Duration::from_secs(2),
+                max_image_bytes: 123,
             },
         );
 
@@ -263,17 +597,92 @@ mod tests {
     }
 
     #[test]
-    fn system_watcher_returns_clear_platform_error() {
-        let error = match system_watcher(ClipboardWatcherConfig::default()) {
-            Ok(_) => panic!("platform backend should remain explicit until implemented"),
-            Err(error) => error,
-        };
+    fn platform_capabilities_describe_image_support() {
+        let linux = platform_capabilities(ClipboardPlatform::Linux);
+        assert!(linux.text);
+        assert!(linux.image);
+        assert!(linux.image_formats.contains(&"image/png"));
 
-        match error {
-            ClipboardError::Unavailable { platform, reason } => {
-                assert_eq!(platform, current_platform());
-                assert!(!reason.is_empty());
+        let unknown = platform_capabilities(ClipboardPlatform::Unknown);
+        assert!(!unknown.text);
+        assert!(!unknown.image);
+        assert!(unknown.image_formats.is_empty());
+    }
+
+    #[test]
+    fn normalizes_rgba_image_to_png_payload() {
+        let payload = normalize_image(
+            ImageData {
+                width: 1,
+                height: 1,
+                bytes: Cow::Borrowed(&[255, 0, 0, 255]),
+            },
+            ClipboardPlatform::Linux,
+        )
+        .expect("image should normalize");
+
+        assert_eq!(payload.mime_type, "image/png");
+        assert_eq!(payload.width, 1);
+        assert_eq!(payload.height, 1);
+        assert_eq!(payload.byte_size, payload.bytes.len());
+        assert!(payload.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(
+            payload.platform_format.as_deref(),
+            Some("arboard:image/png-or-decoded-rgba")
+        );
+    }
+
+    #[test]
+    fn rejects_non_rgba_image_data() {
+        let error = normalize_image(
+            ImageData {
+                width: 1,
+                height: 1,
+                bytes: Cow::Borrowed(&[255, 0, 0]),
+            },
+            ClipboardPlatform::Linux,
+        )
+        .expect_err("non-rgba data should fail");
+
+        assert!(matches!(
+            error,
+            ClipboardError::Unsupported {
+                payload_kind: "image",
+                ..
             }
+        ));
+    }
+
+    #[test]
+    fn system_watcher_returns_typed_platform_error_when_unavailable() {
+        if let Err(error) = system_watcher(ClipboardWatcherConfig::default()) {
+            match error {
+                ClipboardError::Unavailable { platform, reason } => {
+                    assert_eq!(platform, current_platform());
+                    assert!(!reason.is_empty());
+                }
+                ClipboardError::Occupied { platform } => {
+                    assert_eq!(platform, current_platform());
+                }
+                ClipboardError::Backend { platform, message } => {
+                    assert_eq!(platform, current_platform());
+                    assert!(!message.is_empty());
+                }
+                ClipboardError::Unsupported { platform, .. } => {
+                    assert_eq!(platform, current_platform());
+                }
+            }
+        }
+    }
+
+    fn sample_clipboard_image() -> ClipboardImage {
+        ClipboardImage {
+            bytes: vec![1, 2, 3, 4],
+            mime_type: "image/png".to_owned(),
+            width: 1,
+            height: 1,
+            byte_size: 4,
+            platform_format: Some("test:image".to_owned()),
         }
     }
 }
