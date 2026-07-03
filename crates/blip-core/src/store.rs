@@ -1,7 +1,8 @@
 use crate::LocalBlobStore;
 use crate::domain::{
     ActorType, AuditEvent, AuditEventType, Blip, BlipMove, BlipSummary, ClipboardPayload,
-    ContentType, NewBlip, NewClipboardPayload, NewWorkspace, PayloadKind, Workspace,
+    ContentType, NewBlip, NewClipboardMetadataPayload, NewClipboardPayload, NewWorkspace,
+    PayloadKind, Workspace,
 };
 use crate::error::{BlipError, is_sqlite_busy_error};
 use crate::secrets::add_secret_tags;
@@ -410,6 +411,57 @@ impl BlipStore {
 
     pub fn get_blip_payloads(&self, blip_id: &str) -> Result<Vec<ClipboardPayload>, BlipError> {
         Self::get_blip_payloads_from(&self.conn, blip_id)
+    }
+
+    pub fn insert_metadata_payload(
+        &mut self,
+        blip_id: &str,
+        payload: &NewClipboardMetadataPayload,
+    ) -> Result<ClipboardPayload, BlipError> {
+        validate_metadata_payload(payload)?;
+        self.with_busy_retry(|store| store.insert_metadata_payload_once(blip_id, payload))
+    }
+
+    fn insert_metadata_payload_once(
+        &mut self,
+        blip_id: &str,
+        payload: &NewClipboardMetadataPayload,
+    ) -> Result<ClipboardPayload, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        if Self::get_blip_from(&tx, blip_id)?.is_none() {
+            return Err(BlipError::BlipNotFound(blip_id.to_owned()));
+        }
+
+        let id = format!("{blip_id}:payload:{}", Uuid::new_v4());
+        let created_at = Utc::now();
+        let metadata_json = serde_json::to_string(&payload.metadata)?;
+        tx.execute(
+            "INSERT INTO blip_payloads (
+                id, blip_id, payload_kind, mime_type, platform_format, byte_size, content_hash,
+                source_app, captured_at, preview_ref, blob_ref, inline_text, metadata_json, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, NULL, ?10, ?11, ?8)",
+            params![
+                id,
+                blip_id,
+                payload.kind.as_str(),
+                &payload.mime_type,
+                &payload.platform_format,
+                payload.byte_size,
+                &payload.source_app,
+                created_at,
+                &payload.preview_ref,
+                &payload.inline_text,
+                metadata_json,
+            ],
+        )?;
+
+        let inserted = Self::get_payload_from(&tx, &id)?
+            .ok_or_else(|| BlipError::Database(rusqlite::Error::QueryReturnedNoRows))?;
+        tx.commit()?;
+        Ok(inserted)
     }
 
     pub fn insert_blob_payload(
@@ -1182,11 +1234,11 @@ fn validate_blob_payload(payload: &NewClipboardPayload) -> Result<(), BlipError>
 
     if !matches!(
         payload.kind,
-        PayloadKind::Image | PayloadKind::FileList | PayloadKind::Html | PayloadKind::Rtf
+        PayloadKind::Image | PayloadKind::Html | PayloadKind::Rtf | PayloadKind::Unknown
     ) {
         return Err(BlipError::InvalidInput {
             field: "payload.kind",
-            reason: "must be a blob-backed rich payload kind",
+            reason: "must be a blob-backed rich payload kind; file lists are metadata-only",
         });
     }
 
@@ -1198,6 +1250,31 @@ fn validate_blob_payload(payload: &NewClipboardPayload) -> Result<(), BlipError>
         return Err(BlipError::InvalidInput {
             field: "payload.inline_text",
             reason: "must be empty for binary payloads",
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_metadata_payload(payload: &NewClipboardMetadataPayload) -> Result<(), BlipError> {
+    if payload.byte_size < 0 {
+        return Err(BlipError::InvalidInput {
+            field: "payload.byte_size",
+            reason: "must be greater than or equal to 0",
+        });
+    }
+
+    if !matches!(payload.kind, PayloadKind::FileList | PayloadKind::Unknown) {
+        return Err(BlipError::InvalidInput {
+            field: "payload.kind",
+            reason: "must be file_list or unknown for metadata-only payloads",
+        });
+    }
+
+    if payload.inline_text.is_some() {
+        return Err(BlipError::InvalidInput {
+            field: "payload.inline_text",
+            reason: "must be empty for metadata-only payloads",
         });
     }
 
@@ -1598,6 +1675,78 @@ mod tests {
             .get_blip_payloads(&blip.id)
             .expect("payloads should list");
         assert_eq!(payloads.len(), 2);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn insert_metadata_payload_records_file_list_without_blob_ref() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let blip = insert_test_blip(&mut store, "file-list placeholder");
+
+        let payload = store
+            .insert_metadata_payload(
+                &blip.id,
+                &NewClipboardMetadataPayload {
+                    kind: PayloadKind::FileList,
+                    mime_type: Some("text/uri-list".to_owned()),
+                    platform_format: Some("test:file-list".to_owned()),
+                    source_app: None,
+                    preview_ref: None,
+                    inline_text: None,
+                    metadata: serde_json::json!({
+                        "policy": "metadata_only",
+                        "paths": ["/tmp/a.txt", "/tmp/b.txt"],
+                    }),
+                    byte_size: 20,
+                },
+            )
+            .expect("metadata payload should insert");
+
+        assert_eq!(payload.kind, PayloadKind::FileList);
+        assert_eq!(payload.mime_type.as_deref(), Some("text/uri-list"));
+        assert_eq!(payload.byte_size, 20);
+        assert!(payload.blob_ref.is_none());
+        assert!(payload.content_hash.is_none());
+        assert!(payload.inline_text.is_none());
+        assert_eq!(payload.metadata["policy"], "metadata_only");
+
+        let payloads = store
+            .get_blip_payloads(&blip.id)
+            .expect("payloads should list");
+        assert_eq!(payloads.len(), 2);
+        assert!(
+            payloads
+                .iter()
+                .any(|payload| payload.kind == PayloadKind::FileList)
+        );
+    }
+
+    #[test]
+    fn insert_blob_payload_rejects_file_list_bytes() {
+        let root = temp_blob_root("store-file-list-blob-reject");
+        let blob_store = LocalBlobStore::with_max_blob_bytes(&root, 1024);
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let blip = insert_test_blip(&mut store, "file-list placeholder");
+        let mut payload = image_payload(b"file bytes should not import");
+        payload.kind = PayloadKind::FileList;
+        payload.mime_type = Some("text/uri-list".to_owned());
+        payload.platform_format = Some("test:file-list".to_owned());
+        payload.metadata = serde_json::json!({
+            "policy": "metadata_only",
+        });
+
+        let error = store
+            .insert_blob_payload(&blip.id, &payload, &blob_store)
+            .expect_err("file-list bytes should be rejected");
+
+        assert!(matches!(
+            error,
+            BlipError::InvalidInput {
+                field: "payload.kind",
+                ..
+            }
+        ));
 
         let _ = std::fs::remove_dir_all(root);
     }

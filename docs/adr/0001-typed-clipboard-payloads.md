@@ -133,6 +133,49 @@ Normalized image metadata should use stable field names for `mime_type`,
 the decoded pixel dimensions. Byte size describes the stored or to-be-stored
 encoded bytes, not an estimated in-memory bitmap size.
 
+## File Lists, Rich Text, and Unknown Formats
+
+Phase 8.4 keeps file-list and rich-text capture conservative by default.
+
+File-list payloads represent copied file references, not automatic file imports.
+The stored payload should include path or display metadata, the original platform
+format, source app, capture timestamp, and byte-size information when the
+clipboard runtime provides it. The daemon must not eagerly copy the referenced
+file bytes into blob storage just because a file manager placed file references
+on the clipboard. Reading, exporting, opening, or importing those files is a
+separate explicit user action and must be audited.
+
+Path metadata must avoid silent lossy conversion. When the platform exposes
+paths, store a display string only as a convenience field and also keep a
+platform-native representation, such as Unix path bytes or Windows UTF-16 code
+units, so later audited open/import actions can reason about the original
+reference.
+
+HTML and RTF payloads should remain typed as `html` or `rtf` while also exposing
+a bounded plain-text fallback. The fallback is the value used for legacy
+`blips.content`, search, summaries, and default agent bundle text. Markup bytes
+or rich formatting metadata may be stored as inline text or blob-backed payload
+data according to size and safety limits, but clients must not treat captured
+HTML or RTF as trusted UI.
+
+Unknown platform formats are first-class audit records. When a clipboard reader
+can observe a format but cannot decode it, the payload kind should be `unknown`
+with available format identifiers, advertised MIME type or target names, byte
+size, source app, capture time, and other structured metadata. Unknown payloads
+must not be silently downgraded to plain text or hidden as empty clipboard data.
+
+The portable `arboard` backend used for this phase exposes file-list and HTML
+reads, but not RTF reads or generic clipboard format enumeration. The shared
+storage and daemon paths support `rtf` and `unknown` so platform-specific readers
+can add those observations later without another schema change.
+
+Rendering and import rules are intentionally restrictive. Preview generation
+must avoid executing untrusted HTML, loading remote resources, following file
+references, or invoking privileged platform renderers without an explicit
+user-controlled path. Agent access should receive metadata and plain-text
+fallbacks by default; raw rich markup, file contents, and unsafe or unknown
+payload bytes require policy-approved retrieval by id.
+
 ## Consequences
 
 This keeps Phase 8 incremental. Search, summaries, agent bundles, and current
