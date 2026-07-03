@@ -421,15 +421,7 @@ impl BlipStore {
         validate_blob_payload(payload)?;
 
         let metadata = blob_store.write(&payload.bytes)?;
-        match self.insert_blob_payload_metadata(blip_id, payload, &metadata) {
-            Ok(inserted) => Ok(inserted),
-            Err(error) => {
-                if !self.is_blob_ref_referenced(&metadata.blob_ref)? {
-                    let _ = blob_store.delete(&metadata.blob_ref);
-                }
-                Err(error)
-            }
-        }
+        self.insert_blob_payload_metadata(blip_id, payload, &metadata)
     }
 
     fn insert_blob_payload_metadata(
@@ -1678,10 +1670,16 @@ mod tests {
     }
 
     #[test]
-    fn insert_blob_payload_cleans_unique_blob_after_metadata_failure() {
-        let root = temp_blob_root("store-rollback-cleanup");
+    fn insert_blob_payload_leaves_unique_failed_metadata_blob_for_gc() {
+        let root = temp_blob_root("store-rollback-gc");
         let blob_store = LocalBlobStore::with_max_blob_bytes(&root, 1024);
         let mut store = BlipStore::in_memory().expect("store should initialize");
+        let metadata = blob_store
+            .write(b"rollback bytes")
+            .expect("test blob should write");
+        blob_store
+            .delete(&metadata.blob_ref)
+            .expect("test blob should reset");
 
         let error = store
             .insert_blob_payload(
@@ -1693,10 +1691,15 @@ mod tests {
         assert!(matches!(error, BlipError::BlipNotFound(id) if id == "missing-blip"));
         assert!(
             blob_store
+                .exists(&metadata.blob_ref)
+                .expect("unreferenced blob should remain for GC")
+        );
+        assert!(
+            blob_store
                 .garbage_collect(&HashSet::new())
-                .expect("gc should find no leftovers")
+                .expect("gc should remove unreferenced leftover")
                 .removed
-                .is_empty()
+                == vec![metadata.blob_ref]
         );
 
         let _ = std::fs::remove_dir_all(root);

@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
 const BLOB_DIR: &str = "blobs";
@@ -11,6 +12,7 @@ const TMP_DIR: &str = "tmp";
 const SHA256_PREFIX: &str = "sha256";
 const DEFAULT_MAX_BLOB_BYTES: u64 = 100 * 1024 * 1024;
 const SHA256_HEX_LEN: usize = 64;
+const STALE_TMP_FILE_AGE: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlobMetadata {
@@ -53,13 +55,18 @@ impl LocalBlobStore {
     }
 
     pub fn recover(&self) -> Result<(), BlipError> {
+        self.recover_stale_tmp_files(STALE_TMP_FILE_AGE)
+    }
+
+    fn recover_stale_tmp_files(&self, min_age: Duration) -> Result<(), BlipError> {
         let tmp_dir = self.tmp_dir();
         fs::create_dir_all(&tmp_dir)?;
+        let now = SystemTime::now();
 
         for entry in fs::read_dir(&tmp_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.is_file() {
+            if tmp_file_is_stale(&path, now, min_age)? {
                 fs::remove_file(path)?;
             }
         }
@@ -268,6 +275,18 @@ fn validate_file_hash(path: &Path, expected_hash: &str, blob_ref: &str) -> Resul
     }
 }
 
+fn tmp_file_is_stale(path: &Path, now: SystemTime, min_age: Duration) -> Result<bool, BlipError> {
+    let metadata = fs::metadata(path)?;
+    if !metadata.is_file() {
+        return Ok(false);
+    }
+
+    let modified_at = metadata.modified()?;
+    Ok(now
+        .duration_since(modified_at)
+        .is_ok_and(|age| age >= min_age))
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut hex = String::with_capacity(SHA256_HEX_LEN);
@@ -364,14 +383,16 @@ mod tests {
     }
 
     #[test]
-    fn recover_removes_orphaned_temp_files() {
+    fn stale_recovery_removes_orphaned_temp_files() {
         let root = temp_path("blob-recover");
         let store = LocalBlobStore::with_max_blob_bytes(&root, 1024);
         let tmp_dir = store.root().join(TMP_DIR);
         fs::create_dir_all(&tmp_dir).expect("tmp dir should create");
         fs::write(tmp_dir.join("orphan.tmp"), b"partial").expect("orphan should write");
 
-        store.recover().expect("recovery should clean temp files");
+        store
+            .recover_stale_tmp_files(Duration::ZERO)
+            .expect("stale recovery should clean temp files");
 
         assert!(
             fs::read_dir(tmp_dir)
@@ -379,6 +400,24 @@ mod tests {
                 .next()
                 .is_none()
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recover_preserves_recent_temp_files_to_avoid_racing_active_writers() {
+        let root = temp_path("blob-recover-recent");
+        let store = LocalBlobStore::with_max_blob_bytes(&root, 1024);
+        let tmp_dir = store.root().join(TMP_DIR);
+        fs::create_dir_all(&tmp_dir).expect("tmp dir should create");
+        let active_tmp = tmp_dir.join("active.tmp");
+        fs::write(&active_tmp, b"partial").expect("active temp should write");
+
+        store
+            .recover()
+            .expect("recovery should preserve recent temp files");
+
+        assert!(active_tmp.exists());
 
         let _ = fs::remove_dir_all(root);
     }
