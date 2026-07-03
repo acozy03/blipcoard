@@ -178,6 +178,28 @@ Phase 8.3 platform image behavior:
 - unsupported image formats and unavailable clipboard runtimes produce typed
   errors instead of being downgraded to text or hidden as empty clipboard data
 
+Phase 8.4 file-list and rich-text behavior:
+
+- copied file lists are metadata-only references by default: store path/display
+  metadata, platform format, byte size when available, source app, capture time,
+  and audit details, but do not copy or import the referenced file bytes unless a
+  later explicit user action requests it
+- HTML and RTF payloads preserve typed payload metadata and provide a bounded
+  plain-text fallback for search, summaries, legacy `Blip.content`, and agent
+  bundles; rich markup is not treated as trusted application UI
+- unknown platform formats are captured as auditable metadata when observable,
+  including platform format identifiers, advertised MIME type or target names,
+  byte size when available, source app, and capture time, without pretending the
+  payload was decoded successfully
+- the portable clipboard backend currently observes file-list and HTML payloads;
+  RTF and generic unknown-format observation are represented in the shared
+  runtime/storage model and require platform-specific readers before they are
+  emitted by the live system
+- preview, export, and open behavior must avoid privileged rendering or
+  importing unsafe content: the daemon records what was copied, while any raw
+  file read, rich markup render, or external opener action requires explicit
+  user or policy-approved access
+
 Out of scope:
 
 - optical character recognition as an ingestion requirement

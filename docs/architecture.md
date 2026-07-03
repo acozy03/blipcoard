@@ -272,6 +272,8 @@ Storage rules for rich payloads:
 
 - keep searchable and listable metadata in SQLite
 - keep binary bytes in a local blob store under the configured data directory
+- store copied file-list payloads as references and metadata by default, not as
+  automatically imported copies of the referenced files
 - use content hashes for dedupe and integrity checks
 - make blob writes recoverable if the daemon crashes between file and SQLite
   updates
@@ -283,23 +285,45 @@ Preview rules:
 - list views should show lightweight metadata and bounded previews only
 - image thumbnails should be generated locally and size-limited
 - desktop preview rendering must not execute untrusted HTML
+- HTML and RTF previews should use a sanitized, bounded plain-text fallback by
+  default and preserve rich payload metadata separately
 - CLI output should never dump binary data by default
 - raw payload reads should require an explicit id-based command or API request
+- file opens, file imports, rich markup rendering, and external opener actions
+  should require explicit user or policy-approved access
 
 Policy rules:
 
 - rich payload capture should be configurable by payload type
 - screenshots and images should be treated as sensitive by default
 - agents should not receive raw binary payloads unless workspace policy allows it
+- agents receive metadata and plain-text fallbacks for HTML, RTF, file-list, and
+  unknown payloads by default, not privileged renders or imported file contents
 - thumbnail reads, raw payload exports, and agent payload reads should be audited
 - deletion must remove both SQLite records and blob data when no other blip
   references the same blob
+
+Audit rules:
+
+- file-list payloads should record the observed references, source format,
+  source app, capture time, and whether any later import/export/open action read
+  file bytes; display paths are convenience metadata and should be accompanied by
+  platform-native path bytes or UTF-16 code units when available
+- unknown payloads should remain visible in audit and list views with their
+  platform format identifiers and available size metadata, even when no decoder
+  exists yet
+- failed or refused rich payload handling should be reported as typed unsupported,
+  unsafe, unavailable, or policy-denied outcomes instead of disappearing as empty
+  clipboard data
 
 Platform notes:
 
 - macOS screenshot clipboard support should account for pasteboard image types
 - Linux support should account for X11 and Wayland differences
 - Windows support should account for bitmap and file-drop clipboard formats
+- portable rich clipboard capture currently covers file-list and HTML payloads
+  through the clipboard backend; RTF and generic unknown-format observation need
+  platform-specific readers before live ingestion can emit them
 - every platform reader should expose capabilities so the daemon can explain why
   a payload type was ignored or unsupported
 

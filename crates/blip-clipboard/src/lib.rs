@@ -5,6 +5,7 @@ use image::{ColorType, ExtendedColorType};
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -68,16 +69,48 @@ impl ClipboardEvent {
         }
     }
 
+    pub fn file_list(file_list: ClipboardFileList) -> Self {
+        Self {
+            payload: ClipboardPayload::FileList(file_list),
+        }
+    }
+
+    pub fn html(rich_text: ClipboardRichText) -> Self {
+        Self {
+            payload: ClipboardPayload::Html(rich_text),
+        }
+    }
+
+    pub fn rtf(rich_text: ClipboardRichText) -> Self {
+        Self {
+            payload: ClipboardPayload::Rtf(rich_text),
+        }
+    }
+
+    pub fn unknown(unknown: ClipboardUnknown) -> Self {
+        Self {
+            payload: ClipboardPayload::Unknown(unknown),
+        }
+    }
+
     pub fn text_payload(&self) -> Option<&str> {
         match &self.payload {
             ClipboardPayload::Text(text) => Some(text.as_str()),
-            ClipboardPayload::Image(_) => None,
+            ClipboardPayload::Image(_)
+            | ClipboardPayload::FileList(_)
+            | ClipboardPayload::Html(_)
+            | ClipboardPayload::Rtf(_)
+            | ClipboardPayload::Unknown(_) => None,
         }
     }
 
     pub fn image_payload(&self) -> Option<&ClipboardImage> {
         match &self.payload {
-            ClipboardPayload::Text(_) => None,
+            ClipboardPayload::Text(_)
+            | ClipboardPayload::FileList(_)
+            | ClipboardPayload::Html(_)
+            | ClipboardPayload::Rtf(_)
+            | ClipboardPayload::Unknown(_) => None,
             ClipboardPayload::Image(image) => Some(image),
         }
     }
@@ -87,6 +120,10 @@ impl ClipboardEvent {
 pub enum ClipboardPayload {
     Text(String),
     Image(ClipboardImage),
+    FileList(ClipboardFileList),
+    Html(ClipboardRichText),
+    Rtf(ClipboardRichText),
+    Unknown(ClipboardUnknown),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,11 +138,40 @@ pub struct ClipboardImage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardFileList {
+    /// Referenced paths from the clipboard. File bytes are not imported by default.
+    pub paths: Vec<PathBuf>,
+    pub byte_size: usize,
+    pub platform_format: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardRichText {
+    pub bytes: Vec<u8>,
+    pub mime_type: String,
+    pub byte_size: usize,
+    pub plain_text: Option<String>,
+    pub platform_format: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardUnknown {
+    pub bytes: Vec<u8>,
+    pub mime_type: Option<String>,
+    pub byte_size: usize,
+    pub platform_format: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardCapabilities {
     pub platform: ClipboardPlatform,
     pub text: bool,
     pub image: bool,
+    pub file_list: bool,
+    pub html: bool,
+    pub rtf: bool,
     pub image_formats: Vec<&'static str>,
+    pub rich_text_formats: Vec<&'static str>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -147,6 +213,22 @@ pub trait ClipboardReader {
     ///
     /// `Ok(None)` means the clipboard currently has no readable image.
     fn read_image(&mut self) -> Result<Option<ClipboardImage>, ClipboardError> {
+        Ok(None)
+    }
+
+    fn read_file_list(&mut self) -> Result<Option<ClipboardFileList>, ClipboardError> {
+        Ok(None)
+    }
+
+    fn read_html(&mut self) -> Result<Option<ClipboardRichText>, ClipboardError> {
+        Ok(None)
+    }
+
+    fn read_rtf(&mut self) -> Result<Option<ClipboardRichText>, ClipboardError> {
+        Ok(None)
+    }
+
+    fn read_unknown(&mut self) -> Result<Option<ClipboardUnknown>, ClipboardError> {
         Ok(None)
     }
 
@@ -195,6 +277,36 @@ where
     R: ClipboardReader,
 {
     fn poll_next(&mut self) -> Result<Option<ClipboardEvent>, ClipboardError> {
+        if let Some(file_list) = self.reader.read_file_list()? {
+            let fingerprint = ClipboardPayloadFingerprint::file_list(&file_list);
+            if self.last_payload.as_ref() == Some(&fingerprint) {
+                return Ok(None);
+            }
+
+            self.last_payload = Some(fingerprint);
+            return Ok(Some(ClipboardEvent::file_list(file_list)));
+        }
+
+        if let Some(html) = self.reader.read_html()? {
+            let fingerprint = ClipboardPayloadFingerprint::rich_text("html", &html);
+            if self.last_payload.as_ref() == Some(&fingerprint) {
+                return Ok(None);
+            }
+
+            self.last_payload = Some(fingerprint);
+            return Ok(Some(ClipboardEvent::html(html)));
+        }
+
+        if let Some(rtf) = self.reader.read_rtf()? {
+            let fingerprint = ClipboardPayloadFingerprint::rich_text("rtf", &rtf);
+            if self.last_payload.as_ref() == Some(&fingerprint) {
+                return Ok(None);
+            }
+
+            self.last_payload = Some(fingerprint);
+            return Ok(Some(ClipboardEvent::rtf(rtf)));
+        }
+
         if let Some(text) = self.reader.read_text()? {
             let fingerprint = ClipboardPayloadFingerprint::text(&text);
             if self.last_payload.as_ref() == Some(&fingerprint) {
@@ -215,6 +327,16 @@ where
             return Ok(Some(ClipboardEvent::image(image)));
         }
 
+        if let Some(unknown) = self.reader.read_unknown()? {
+            let fingerprint = ClipboardPayloadFingerprint::unknown(&unknown);
+            if self.last_payload.as_ref() == Some(&fingerprint) {
+                return Ok(None);
+            }
+
+            self.last_payload = Some(fingerprint);
+            return Ok(Some(ClipboardEvent::unknown(unknown)));
+        }
+
         self.last_payload = None;
         Ok(None)
     }
@@ -223,9 +345,23 @@ where
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ClipboardPayloadFingerprint {
     Text(String),
+    FileList {
+        paths: Vec<PathBuf>,
+        byte_size: usize,
+    },
+    RichText {
+        kind: &'static str,
+        byte_size: usize,
+        content_hash: u64,
+    },
     Image {
         width: u32,
         height: u32,
+        byte_size: usize,
+        content_hash: u64,
+    },
+    Unknown {
+        platform_format: String,
         byte_size: usize,
         content_hash: u64,
     },
@@ -243,6 +379,33 @@ impl ClipboardPayloadFingerprint {
             width: image.width,
             height: image.height,
             byte_size: image.byte_size,
+            content_hash: hasher.finish(),
+        }
+    }
+
+    fn file_list(file_list: &ClipboardFileList) -> Self {
+        Self::FileList {
+            paths: file_list.paths.clone(),
+            byte_size: file_list.byte_size,
+        }
+    }
+
+    fn rich_text(kind: &'static str, rich_text: &ClipboardRichText) -> Self {
+        let mut hasher = DefaultHasher::new();
+        rich_text.bytes.hash(&mut hasher);
+        Self::RichText {
+            kind,
+            byte_size: rich_text.byte_size,
+            content_hash: hasher.finish(),
+        }
+    }
+
+    fn unknown(unknown: &ClipboardUnknown) -> Self {
+        let mut hasher = DefaultHasher::new();
+        unknown.bytes.hash(&mut hasher);
+        Self::Unknown {
+            platform_format: unknown.platform_format.clone(),
+            byte_size: unknown.byte_size,
             content_hash: hasher.finish(),
         }
     }
@@ -270,25 +433,41 @@ pub fn platform_capabilities(platform: ClipboardPlatform) -> ClipboardCapabiliti
             platform,
             text: true,
             image: true,
+            file_list: true,
+            html: true,
+            rtf: false,
             image_formats: vec!["image/png", "image/bmp", "image/tiff"],
+            rich_text_formats: vec!["text/html", "text/uri-list"],
         },
         ClipboardPlatform::MacOs => ClipboardCapabilities {
             platform,
             text: true,
             image: true,
+            file_list: true,
+            html: true,
+            rtf: false,
             image_formats: vec!["public.png", "public.tiff", "NSImage"],
+            rich_text_formats: vec!["public.html", "public.file-url"],
         },
         ClipboardPlatform::Windows => ClipboardCapabilities {
             platform,
             text: true,
             image: true,
+            file_list: true,
+            html: true,
+            rtf: false,
             image_formats: vec!["CF_DIB", "CF_BITMAP", "PNG"],
+            rich_text_formats: vec!["HTML Format", "CF_HDROP"],
         },
         ClipboardPlatform::Unknown => ClipboardCapabilities {
             platform,
             text: false,
             image: false,
+            file_list: false,
+            html: false,
+            rtf: false,
             image_formats: Vec::new(),
+            rich_text_formats: Vec::new(),
         },
     }
 }
@@ -351,8 +530,86 @@ impl ClipboardReader for PlatformClipboardReader {
         normalize_image(image, self.platform).map(Some)
     }
 
+    fn read_file_list(&mut self) -> Result<Option<ClipboardFileList>, ClipboardError> {
+        let paths = match self.clipboard.get().file_list() {
+            Ok(paths) => paths,
+            Err(ArboardError::ContentNotAvailable) => return Ok(None),
+            Err(error) => return Err(map_arboard_error(error, self.platform)),
+        };
+
+        if paths.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(normalize_file_list(paths, self.platform)))
+    }
+
+    fn read_html(&mut self) -> Result<Option<ClipboardRichText>, ClipboardError> {
+        let html = match self.clipboard.get().html() {
+            Ok(html) => html,
+            Err(ArboardError::ContentNotAvailable) => return Ok(None),
+            Err(error) => return Err(map_arboard_error(error, self.platform)),
+        };
+
+        let plain_text = match self.clipboard.get_text() {
+            Ok(text) if !text.is_empty() => Some(text),
+            Ok(_) | Err(ArboardError::ContentNotAvailable) => None,
+            Err(_) => None,
+        };
+
+        Ok(Some(normalize_rich_text(
+            html,
+            "text/html",
+            platform_html_format(self.platform),
+            plain_text,
+        )))
+    }
+
     fn capabilities(&self) -> ClipboardCapabilities {
         platform_capabilities(self.platform)
+    }
+}
+
+fn normalize_file_list(paths: Vec<PathBuf>, platform: ClipboardPlatform) -> ClipboardFileList {
+    let byte_size = paths.iter().map(|path| path_byte_len(path)).sum();
+    ClipboardFileList {
+        paths,
+        byte_size,
+        platform_format: Some(platform_file_list_format(platform).to_owned()),
+    }
+}
+
+#[cfg(unix)]
+fn path_byte_len(path: &std::path::Path) -> usize {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str().as_bytes().len()
+}
+
+#[cfg(windows)]
+fn path_byte_len(path: &std::path::Path) -> usize {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str().encode_wide().count() * 2
+}
+
+#[cfg(not(any(unix, windows)))]
+fn path_byte_len(path: &std::path::Path) -> usize {
+    path.as_os_str().to_string_lossy().len()
+}
+
+fn normalize_rich_text(
+    content: String,
+    mime_type: &str,
+    platform_format: &str,
+    plain_text: Option<String>,
+) -> ClipboardRichText {
+    let bytes = content.into_bytes();
+    let byte_size = bytes.len();
+    ClipboardRichText {
+        bytes,
+        mime_type: mime_type.to_owned(),
+        byte_size,
+        plain_text,
+        platform_format: Some(platform_format.to_owned()),
     }
 }
 
@@ -463,6 +720,24 @@ fn platform_image_format(platform: ClipboardPlatform) -> &'static str {
     }
 }
 
+fn platform_file_list_format(platform: ClipboardPlatform) -> &'static str {
+    match platform {
+        ClipboardPlatform::Linux => "arboard:text-uri-list",
+        ClipboardPlatform::MacOs => "arboard:NSPasteboard-file-url",
+        ClipboardPlatform::Windows => "arboard:CF_HDROP",
+        ClipboardPlatform::Unknown => "arboard:file-list",
+    }
+}
+
+fn platform_html_format(platform: ClipboardPlatform) -> &'static str {
+    match platform {
+        ClipboardPlatform::Linux => "arboard:text/html",
+        ClipboardPlatform::MacOs => "arboard:NSPasteboardTypeHTML",
+        ClipboardPlatform::Windows => "arboard:HTML Format",
+        ClipboardPlatform::Unknown => "arboard:text/html",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,8 +747,16 @@ mod tests {
     struct StubClipboardReader {
         reads: Vec<Option<&'static str>>,
         images: Vec<Option<ClipboardImage>>,
+        file_lists: Vec<Option<ClipboardFileList>>,
+        html: Vec<Option<ClipboardRichText>>,
+        rtf: Vec<Option<ClipboardRichText>>,
+        unknown: Vec<Option<ClipboardUnknown>>,
         index: usize,
         image_index: usize,
+        file_list_index: usize,
+        html_index: usize,
+        rtf_index: usize,
+        unknown_index: usize,
     }
 
     impl ClipboardReader for StubClipboardReader {
@@ -488,16 +771,55 @@ mod tests {
             self.image_index += 1;
             Ok(value)
         }
+
+        fn read_file_list(&mut self) -> Result<Option<ClipboardFileList>, ClipboardError> {
+            let value = self.file_lists.get(self.file_list_index).cloned().flatten();
+            self.file_list_index += 1;
+            Ok(value)
+        }
+
+        fn read_html(&mut self) -> Result<Option<ClipboardRichText>, ClipboardError> {
+            let value = self.html.get(self.html_index).cloned().flatten();
+            self.html_index += 1;
+            Ok(value)
+        }
+
+        fn read_rtf(&mut self) -> Result<Option<ClipboardRichText>, ClipboardError> {
+            let value = self.rtf.get(self.rtf_index).cloned().flatten();
+            self.rtf_index += 1;
+            Ok(value)
+        }
+
+        fn read_unknown(&mut self) -> Result<Option<ClipboardUnknown>, ClipboardError> {
+            let value = self.unknown.get(self.unknown_index).cloned().flatten();
+            self.unknown_index += 1;
+            Ok(value)
+        }
+    }
+
+    impl StubClipboardReader {
+        fn new(reads: Vec<Option<&'static str>>) -> Self {
+            Self {
+                reads,
+                images: Vec::new(),
+                file_lists: Vec::new(),
+                html: Vec::new(),
+                rtf: Vec::new(),
+                unknown: Vec::new(),
+                index: 0,
+                image_index: 0,
+                file_list_index: 0,
+                html_index: 0,
+                rtf_index: 0,
+                unknown_index: 0,
+            }
+        }
     }
 
     #[test]
     fn polling_watcher_emits_only_when_text_changes() {
-        let reader = StubClipboardReader {
-            reads: vec![Some("first"), Some("first"), Some("second"), None],
-            images: vec![None, None, None, None],
-            index: 0,
-            image_index: 0,
-        };
+        let reader =
+            StubClipboardReader::new(vec![Some("first"), Some("first"), Some("second"), None]);
         let mut watcher = PollingClipboardWatcher::new(reader, ClipboardWatcherConfig::default());
 
         assert_eq!(
@@ -514,12 +836,7 @@ mod tests {
 
     #[test]
     fn polling_watcher_treats_absent_text_as_state_change() {
-        let reader = StubClipboardReader {
-            reads: vec![Some("first"), None, Some("first")],
-            images: vec![None, None, None],
-            index: 0,
-            image_index: 0,
-        };
+        let reader = StubClipboardReader::new(vec![Some("first"), None, Some("first")]);
         let mut watcher = PollingClipboardWatcher::new(reader, ClipboardWatcherConfig::default());
 
         assert_eq!(
@@ -536,12 +853,8 @@ mod tests {
     #[test]
     fn polling_watcher_preserves_text_when_text_and_image_are_available() {
         let image = sample_clipboard_image();
-        let reader = StubClipboardReader {
-            reads: vec![Some("fallback text")],
-            images: vec![Some(image.clone())],
-            index: 0,
-            image_index: 0,
-        };
+        let mut reader = StubClipboardReader::new(vec![Some("fallback text")]);
+        reader.images = vec![Some(image)];
         let mut watcher = PollingClipboardWatcher::new(reader, ClipboardWatcherConfig::default());
 
         assert_eq!(
@@ -553,17 +866,13 @@ mod tests {
     #[test]
     fn polling_watcher_suppresses_duplicate_images_and_resets_on_none() {
         let image = sample_clipboard_image();
-        let reader = StubClipboardReader {
-            reads: vec![None, None, None, None],
-            images: vec![
-                Some(image.clone()),
-                Some(image.clone()),
-                None,
-                Some(image.clone()),
-            ],
-            index: 0,
-            image_index: 0,
-        };
+        let mut reader = StubClipboardReader::new(vec![None, None, None, None]);
+        reader.images = vec![
+            Some(image.clone()),
+            Some(image.clone()),
+            None,
+            Some(image.clone()),
+        ];
         let mut watcher = PollingClipboardWatcher::new(reader, ClipboardWatcherConfig::default());
 
         assert_eq!(
@@ -581,12 +890,7 @@ mod tests {
     #[test]
     fn polling_watcher_preserves_configured_interval() {
         let watcher = PollingClipboardWatcher::new(
-            StubClipboardReader {
-                reads: vec![None],
-                images: vec![None],
-                index: 0,
-                image_index: 0,
-            },
+            StubClipboardReader::new(vec![None]),
             ClipboardWatcherConfig {
                 poll_interval: Duration::from_secs(2),
                 max_image_bytes: 123,
@@ -597,15 +901,68 @@ mod tests {
     }
 
     #[test]
-    fn platform_capabilities_describe_image_support() {
+    fn polling_watcher_emits_file_list_before_text_fallback() {
+        let file_list = sample_file_list();
+        let mut reader = StubClipboardReader::new(vec![Some("file:///tmp/a.txt")]);
+        reader.file_lists = vec![Some(file_list.clone())];
+        let mut watcher = PollingClipboardWatcher::new(reader, ClipboardWatcherConfig::default());
+
+        assert_eq!(
+            watcher.poll_next().expect("poll should succeed"),
+            Some(ClipboardEvent::file_list(file_list))
+        );
+    }
+
+    #[test]
+    fn polling_watcher_emits_html_with_plain_text_fallback() {
+        let html = sample_html();
+        let mut reader = StubClipboardReader::new(vec![Some("Hello")]);
+        reader.html = vec![Some(html.clone())];
+        let mut watcher = PollingClipboardWatcher::new(reader, ClipboardWatcherConfig::default());
+
+        assert_eq!(
+            watcher.poll_next().expect("poll should succeed"),
+            Some(ClipboardEvent::html(html))
+        );
+    }
+
+    #[test]
+    fn polling_watcher_emits_rtf_and_unknown_payloads() {
+        let rtf = sample_rtf();
+        let mut reader = StubClipboardReader::new(vec![None, None]);
+        reader.rtf = vec![Some(rtf.clone()), None];
+        reader.unknown = vec![Some(sample_unknown())];
+        let mut watcher = PollingClipboardWatcher::new(reader, ClipboardWatcherConfig::default());
+
+        assert_eq!(
+            watcher.poll_next().expect("poll should succeed"),
+            Some(ClipboardEvent::rtf(rtf))
+        );
+        assert!(matches!(
+            watcher.poll_next().expect("poll should succeed"),
+            Some(ClipboardEvent {
+                payload: ClipboardPayload::Unknown(_)
+            })
+        ));
+    }
+
+    #[test]
+    fn platform_capabilities_describe_rich_payload_support() {
         let linux = platform_capabilities(ClipboardPlatform::Linux);
         assert!(linux.text);
         assert!(linux.image);
+        assert!(linux.file_list);
+        assert!(linux.html);
+        assert!(!linux.rtf);
         assert!(linux.image_formats.contains(&"image/png"));
+        assert!(linux.rich_text_formats.contains(&"text/html"));
 
         let unknown = platform_capabilities(ClipboardPlatform::Unknown);
         assert!(!unknown.text);
         assert!(!unknown.image);
+        assert!(!unknown.file_list);
+        assert!(!unknown.html);
+        assert!(!unknown.rtf);
         assert!(unknown.image_formats.is_empty());
     }
 
@@ -683,6 +1040,43 @@ mod tests {
             height: 1,
             byte_size: 4,
             platform_format: Some("test:image".to_owned()),
+        }
+    }
+
+    fn sample_file_list() -> ClipboardFileList {
+        ClipboardFileList {
+            paths: vec![PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.txt")],
+            byte_size: 20,
+            platform_format: Some("test:file-list".to_owned()),
+        }
+    }
+
+    fn sample_html() -> ClipboardRichText {
+        ClipboardRichText {
+            bytes: b"<strong>Hello</strong>".to_vec(),
+            mime_type: "text/html".to_owned(),
+            byte_size: 22,
+            plain_text: Some("Hello".to_owned()),
+            platform_format: Some("test:html".to_owned()),
+        }
+    }
+
+    fn sample_rtf() -> ClipboardRichText {
+        ClipboardRichText {
+            bytes: br"{\rtf1 Hello}".to_vec(),
+            mime_type: "text/rtf".to_owned(),
+            byte_size: 13,
+            plain_text: Some("Hello".to_owned()),
+            platform_format: Some("test:rtf".to_owned()),
+        }
+    }
+
+    fn sample_unknown() -> ClipboardUnknown {
+        ClipboardUnknown {
+            bytes: Vec::new(),
+            mime_type: None,
+            byte_size: 42,
+            platform_format: "application/x-test".to_owned(),
         }
     }
 }

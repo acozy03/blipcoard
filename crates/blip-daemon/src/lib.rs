@@ -13,10 +13,14 @@ use blip_api::{
     DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
     DaemonVersionResponse, HealthResponse, WorkspaceListResponse, WorkspaceSummary,
 };
-use blip_clipboard::{ClipboardError, ClipboardImage, ClipboardPayload, ClipboardWatcher};
+use blip_clipboard::{
+    ClipboardError, ClipboardFileList, ClipboardImage, ClipboardPayload, ClipboardRichText,
+    ClipboardUnknown, ClipboardWatcher,
+};
 use blip_core::{AuditEvent, Blip};
 use blip_core::{
-    BlipError, BlipStore, ContentType, LocalBlobStore, NewBlip, NewClipboardPayload, PayloadKind,
+    BlipError, BlipStore, ContentType, LocalBlobStore, NewBlip, NewClipboardMetadataPayload,
+    NewClipboardPayload, PayloadKind,
 };
 use chrono::Utc;
 use std::path::{Path, PathBuf};
@@ -396,6 +400,18 @@ where
                 RuntimeEvent::ClipboardImageChanged { image } => {
                     self.ingest_clipboard_image(image)?;
                 }
+                RuntimeEvent::ClipboardFileListChanged { file_list } => {
+                    self.ingest_clipboard_file_list(file_list)?;
+                }
+                RuntimeEvent::ClipboardHtmlChanged { rich_text } => {
+                    self.ingest_clipboard_rich_text(PayloadKind::Html, rich_text)?;
+                }
+                RuntimeEvent::ClipboardRtfChanged { rich_text } => {
+                    self.ingest_clipboard_rich_text(PayloadKind::Rtf, rich_text)?;
+                }
+                RuntimeEvent::ClipboardUnknownChanged { unknown } => {
+                    self.ingest_clipboard_unknown(unknown)?;
+                }
                 RuntimeEvent::Shutdown => return Ok(()),
             }
         }
@@ -467,6 +483,177 @@ where
             },
             &blob_store,
         )?;
+
+        Ok(())
+    }
+
+    fn ingest_clipboard_file_list(
+        &mut self,
+        file_list: ClipboardFileList,
+    ) -> Result<(), DaemonError> {
+        let workspace_name = self
+            .store
+            .get_sticky_workspace()?
+            .unwrap_or_else(|| INBOX_WORKSPACE.to_owned());
+        let content = format!(
+            "File-list clipboard payload: {} path{}",
+            file_list.paths.len(),
+            if file_list.paths.len() == 1 { "" } else { "s" }
+        );
+        let blip = self.store.insert_blip(&NewBlip {
+            workspace_name,
+            source_app: None,
+            content_type: ContentType::PlainText,
+            language: None,
+            content,
+            token_estimate: None,
+            is_redacted: false,
+            tags: vec![
+                "clipboard:file-list".to_owned(),
+                "rich:clipboard".to_owned(),
+            ],
+        })?;
+
+        self.store.insert_metadata_payload(
+            &blip.id,
+            &NewClipboardMetadataPayload {
+                kind: PayloadKind::FileList,
+                mime_type: Some("text/uri-list".to_owned()),
+                platform_format: file_list.platform_format,
+                source_app: None,
+                preview_ref: None,
+                inline_text: None,
+                metadata: serde_json::json!({
+                    "policy": "metadata_only",
+                    "path_count": file_list.paths.len(),
+                    "paths": file_list
+                        .paths
+                        .iter()
+                        .map(|path| path_metadata(path))
+                        .collect::<Vec<_>>(),
+                }),
+                byte_size: i64::try_from(file_list.byte_size).map_err(|_| {
+                    BlipError::InvalidInput {
+                        field: "payload.byte_size",
+                        reason: "payload is too large for SQLite metadata",
+                    }
+                })?,
+            },
+        )?;
+
+        Ok(())
+    }
+
+    fn ingest_clipboard_rich_text(
+        &mut self,
+        kind: PayloadKind,
+        rich_text: ClipboardRichText,
+    ) -> Result<(), DaemonError> {
+        let workspace_name = self
+            .store
+            .get_sticky_workspace()?
+            .unwrap_or_else(|| INBOX_WORKSPACE.to_owned());
+        let fallback = rich_text
+            .plain_text
+            .clone()
+            .unwrap_or_else(|| format!("{} clipboard payload", rich_text.mime_type));
+        let tag = match kind {
+            PayloadKind::Html => "clipboard:html",
+            PayloadKind::Rtf => "clipboard:rtf",
+            _ => "clipboard:rich-text",
+        };
+        let blip = self.store.insert_blip(&NewBlip {
+            workspace_name,
+            source_app: None,
+            content_type: ContentType::PlainText,
+            language: None,
+            content: fallback,
+            token_estimate: None,
+            is_redacted: false,
+            tags: vec![tag.to_owned(), "rich:clipboard".to_owned()],
+        })?;
+
+        let blob_store = LocalBlobStore::new(self.blob_data_dir());
+        self.store.insert_blob_payload(
+            &blip.id,
+            &NewClipboardPayload {
+                kind,
+                mime_type: Some(rich_text.mime_type),
+                platform_format: rich_text.platform_format,
+                source_app: None,
+                preview_ref: None,
+                inline_text: rich_text.plain_text,
+                metadata: serde_json::json!({
+                    "fallback": "plain_text",
+                    "render_policy": "do_not_render_privileged",
+                }),
+                bytes: rich_text.bytes,
+            },
+            &blob_store,
+        )?;
+
+        Ok(())
+    }
+
+    fn ingest_clipboard_unknown(&mut self, unknown: ClipboardUnknown) -> Result<(), DaemonError> {
+        let workspace_name = self
+            .store
+            .get_sticky_workspace()?
+            .unwrap_or_else(|| INBOX_WORKSPACE.to_owned());
+        let blip = self.store.insert_blip(&NewBlip {
+            workspace_name,
+            source_app: None,
+            content_type: ContentType::PlainText,
+            language: None,
+            content: format!(
+                "Unknown clipboard payload: {} ({} bytes)",
+                unknown.platform_format, unknown.byte_size
+            ),
+            token_estimate: None,
+            is_redacted: false,
+            tags: vec!["clipboard:unknown".to_owned(), "rich:clipboard".to_owned()],
+        })?;
+
+        if unknown.bytes.is_empty() {
+            self.store.insert_metadata_payload(
+                &blip.id,
+                &NewClipboardMetadataPayload {
+                    kind: PayloadKind::Unknown,
+                    mime_type: unknown.mime_type,
+                    platform_format: Some(unknown.platform_format),
+                    source_app: None,
+                    preview_ref: None,
+                    inline_text: None,
+                    metadata: serde_json::json!({
+                        "policy": "unsupported_format",
+                    }),
+                    byte_size: i64::try_from(unknown.byte_size).map_err(|_| {
+                        BlipError::InvalidInput {
+                            field: "payload.byte_size",
+                            reason: "payload is too large for SQLite metadata",
+                        }
+                    })?,
+                },
+            )?;
+        } else {
+            let blob_store = LocalBlobStore::new(self.blob_data_dir());
+            self.store.insert_blob_payload(
+                &blip.id,
+                &NewClipboardPayload {
+                    kind: PayloadKind::Unknown,
+                    mime_type: unknown.mime_type,
+                    platform_format: Some(unknown.platform_format),
+                    source_app: None,
+                    preview_ref: None,
+                    inline_text: None,
+                    metadata: serde_json::json!({
+                        "policy": "unsupported_format",
+                    }),
+                    bytes: unknown.bytes,
+                },
+                &blob_store,
+            )?;
+        }
 
         Ok(())
     }
@@ -557,6 +744,61 @@ fn workspace_summary(workspace: blip_core::Workspace) -> WorkspaceSummary {
         agent_access: workspace.agent_access,
         sticky_capture: workspace.sticky_capture,
     }
+}
+
+fn path_metadata(path: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "display_path": path.display().to_string(),
+        "utf8_path": path.to_str(),
+        "raw_encoding": path_raw_encoding(),
+        "raw_hex": path_raw_hex(path),
+    })
+}
+
+#[cfg(unix)]
+fn path_raw_encoding() -> &'static str {
+    "unix-bytes"
+}
+
+#[cfg(windows)]
+fn path_raw_encoding() -> &'static str {
+    "windows-utf16le"
+}
+
+#[cfg(not(any(unix, windows)))]
+fn path_raw_encoding() -> &'static str {
+    "display-only"
+}
+
+#[cfg(unix)]
+fn path_raw_hex(path: &Path) -> Option<String> {
+    use std::os::unix::ffi::OsStrExt;
+    Some(hex_encode(path.as_os_str().as_bytes()))
+}
+
+#[cfg(windows)]
+fn path_raw_hex(path: &Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    let mut bytes = Vec::new();
+    for unit in path.as_os_str().encode_wide() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    Some(hex_encode(&bytes))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn path_raw_hex(_path: &Path) -> Option<String> {
+    None
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 fn route_error_response(
@@ -716,6 +958,10 @@ pub enum RuntimeEvent {
     Idle,
     ClipboardTextChanged { text: String },
     ClipboardImageChanged { image: ClipboardImage },
+    ClipboardFileListChanged { file_list: ClipboardFileList },
+    ClipboardHtmlChanged { rich_text: ClipboardRichText },
+    ClipboardRtfChanged { rich_text: ClipboardRichText },
+    ClipboardUnknownChanged { unknown: ClipboardUnknown },
     Shutdown,
 }
 
@@ -777,6 +1023,16 @@ where
         match event.payload {
             ClipboardPayload::Text(text) => Ok(RuntimeEvent::ClipboardTextChanged { text }),
             ClipboardPayload::Image(image) => Ok(RuntimeEvent::ClipboardImageChanged { image }),
+            ClipboardPayload::FileList(file_list) => {
+                Ok(RuntimeEvent::ClipboardFileListChanged { file_list })
+            }
+            ClipboardPayload::Html(rich_text) => {
+                Ok(RuntimeEvent::ClipboardHtmlChanged { rich_text })
+            }
+            ClipboardPayload::Rtf(rich_text) => Ok(RuntimeEvent::ClipboardRtfChanged { rich_text }),
+            ClipboardPayload::Unknown(unknown) => {
+                Ok(RuntimeEvent::ClipboardUnknownChanged { unknown })
+            }
         }
     }
 }
@@ -1748,6 +2004,48 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_source_maps_rich_events_to_runtime_events() {
+        let file_list = sample_file_list();
+        let html = sample_html();
+        let rtf = sample_rtf();
+        let unknown = sample_unknown();
+        let watcher = ScriptedClipboardWatcher {
+            events: vec![
+                Some(ClipboardEvent::unknown(unknown.clone())),
+                Some(ClipboardEvent::rtf(rtf.clone())),
+                Some(ClipboardEvent::html(html.clone())),
+                Some(ClipboardEvent::file_list(file_list.clone())),
+            ],
+        };
+        let mut source = ClipboardIngestionSource::new(watcher, Duration::ZERO);
+
+        assert_eq!(
+            source
+                .wait_for_next()
+                .expect("clipboard source should poll watcher"),
+            RuntimeEvent::ClipboardFileListChanged { file_list }
+        );
+        assert_eq!(
+            source
+                .wait_for_next()
+                .expect("clipboard source should poll watcher"),
+            RuntimeEvent::ClipboardHtmlChanged { rich_text: html }
+        );
+        assert_eq!(
+            source
+                .wait_for_next()
+                .expect("clipboard source should poll watcher"),
+            RuntimeEvent::ClipboardRtfChanged { rich_text: rtf }
+        );
+        assert_eq!(
+            source
+                .wait_for_next()
+                .expect("clipboard source should poll watcher"),
+            RuntimeEvent::ClipboardUnknownChanged { unknown }
+        );
+    }
+
+    #[test]
     fn runtime_persists_clipboard_text_events_into_inbox() {
         let store = BlipStore::in_memory().expect("store should initialize");
         let source = ScriptedIngestionSource {
@@ -1838,6 +2136,152 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_persists_file_list_events_as_metadata_only_payloads() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let source = ScriptedIngestionSource {
+            events: vec![
+                RuntimeEvent::Shutdown,
+                RuntimeEvent::ClipboardFileListChanged {
+                    file_list: sample_file_list(),
+                },
+            ],
+            calls: 0,
+        };
+        let mut runtime = DaemonRuntime::new("/tmp/blipcoard-test.db", store, source);
+
+        runtime
+            .run()
+            .expect("runtime should ingest clipboard file list");
+
+        let blips = runtime
+            .store
+            .list_blips("inbox")
+            .expect("inbox blips should be listed");
+        assert_eq!(blips.len(), 1);
+        assert!(blips[0].content.contains("File-list clipboard payload"));
+        assert!(blips[0].tags.contains(&"clipboard:file-list".to_owned()));
+
+        let payloads = runtime
+            .store
+            .get_blip_payloads(&blips[0].id)
+            .expect("payloads should list");
+        let payload = payloads
+            .iter()
+            .find(|payload| payload.kind == PayloadKind::FileList)
+            .expect("file-list payload should be stored");
+        assert_eq!(payload.mime_type.as_deref(), Some("text/uri-list"));
+        assert_eq!(payload.platform_format.as_deref(), Some("test:file-list"));
+        assert!(payload.blob_ref.is_none());
+        assert!(payload.inline_text.is_none());
+        assert_eq!(payload.metadata["policy"], "metadata_only");
+        assert_eq!(payload.metadata["path_count"], 2);
+        assert_eq!(
+            payload.metadata["paths"][0]["display_path"],
+            serde_json::Value::String("/tmp/a.txt".to_owned())
+        );
+        assert_eq!(
+            payload.metadata["paths"][0]["utf8_path"],
+            serde_json::Value::String("/tmp/a.txt".to_owned())
+        );
+        assert!(payload.metadata["paths"][0]["raw_hex"].is_string());
+    }
+
+    #[test]
+    fn runtime_persists_html_and_rtf_with_plain_text_fallbacks() {
+        let root = unique_temp_dir("blipcoard-rich-text");
+        std::fs::create_dir_all(&root).expect("temp root should create");
+        let db_path = root.join("blipcoard.db");
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let source = ScriptedIngestionSource {
+            events: vec![
+                RuntimeEvent::Shutdown,
+                RuntimeEvent::ClipboardRtfChanged {
+                    rich_text: sample_rtf(),
+                },
+                RuntimeEvent::ClipboardHtmlChanged {
+                    rich_text: sample_html(),
+                },
+            ],
+            calls: 0,
+        };
+        let mut runtime = DaemonRuntime::new(&db_path, store, source);
+
+        runtime
+            .run()
+            .expect("runtime should ingest rich text payloads");
+
+        let blips = runtime
+            .store
+            .list_blips("inbox")
+            .expect("inbox blips should be listed");
+        assert_eq!(blips.len(), 2);
+        assert!(blips.iter().any(|blip| blip.content == "Hello"));
+
+        let blob_store = LocalBlobStore::new(&root);
+        for blip in blips {
+            let payloads = runtime
+                .store
+                .get_blip_payloads(&blip.id)
+                .expect("payloads should list");
+            let rich_payload = payloads
+                .iter()
+                .find(|payload| matches!(payload.kind, PayloadKind::Html | PayloadKind::Rtf))
+                .expect("rich payload should be stored");
+            assert_eq!(rich_payload.inline_text.as_deref(), Some("Hello"));
+            assert_eq!(rich_payload.metadata["fallback"], "plain_text");
+            let blob_ref = rich_payload
+                .blob_ref
+                .as_deref()
+                .expect("rich payload should have blob ref");
+            assert!(blob_store.exists(blob_ref).expect("blob should exist"));
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_persists_unknown_events_as_auditable_metadata() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let source = ScriptedIngestionSource {
+            events: vec![
+                RuntimeEvent::Shutdown,
+                RuntimeEvent::ClipboardUnknownChanged {
+                    unknown: sample_unknown(),
+                },
+            ],
+            calls: 0,
+        };
+        let mut runtime = DaemonRuntime::new("/tmp/blipcoard-test.db", store, source);
+
+        runtime
+            .run()
+            .expect("runtime should ingest unknown payload");
+
+        let blips = runtime
+            .store
+            .list_blips("inbox")
+            .expect("inbox blips should be listed");
+        assert_eq!(blips.len(), 1);
+        assert!(blips[0].content.contains("Unknown clipboard payload"));
+        assert!(blips[0].tags.contains(&"clipboard:unknown".to_owned()));
+
+        let payloads = runtime
+            .store
+            .get_blip_payloads(&blips[0].id)
+            .expect("payloads should list");
+        let payload = payloads
+            .iter()
+            .find(|payload| payload.kind == PayloadKind::Unknown)
+            .expect("unknown payload should be stored");
+        assert!(payload.blob_ref.is_none());
+        assert_eq!(
+            payload.platform_format.as_deref(),
+            Some("application/x-test")
+        );
+        assert_eq!(payload.metadata["policy"], "unsupported_format");
     }
 
     #[test]
@@ -2053,6 +2497,43 @@ mod tests {
             height: 1,
             byte_size: 8,
             platform_format: Some("test:image".to_owned()),
+        }
+    }
+
+    fn sample_file_list() -> ClipboardFileList {
+        ClipboardFileList {
+            paths: vec![PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.txt")],
+            byte_size: 20,
+            platform_format: Some("test:file-list".to_owned()),
+        }
+    }
+
+    fn sample_html() -> ClipboardRichText {
+        ClipboardRichText {
+            bytes: b"<strong>Hello</strong>".to_vec(),
+            mime_type: "text/html".to_owned(),
+            byte_size: 22,
+            plain_text: Some("Hello".to_owned()),
+            platform_format: Some("test:html".to_owned()),
+        }
+    }
+
+    fn sample_rtf() -> ClipboardRichText {
+        ClipboardRichText {
+            bytes: br"{\rtf1 Hello}".to_vec(),
+            mime_type: "text/rtf".to_owned(),
+            byte_size: 13,
+            plain_text: Some("Hello".to_owned()),
+            platform_format: Some("test:rtf".to_owned()),
+        }
+    }
+
+    fn sample_unknown() -> ClipboardUnknown {
+        ClipboardUnknown {
+            bytes: Vec::new(),
+            mime_type: None,
+            byte_size: 42,
+            platform_format: "application/x-test".to_owned(),
         }
     }
 

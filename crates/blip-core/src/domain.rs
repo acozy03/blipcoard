@@ -167,6 +167,18 @@ pub struct NewClipboardPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewClipboardMetadataPayload {
+    pub kind: PayloadKind,
+    pub mime_type: Option<String>,
+    pub platform_format: Option<String>,
+    pub source_app: Option<String>,
+    pub preview_ref: Option<String>,
+    pub inline_text: Option<String>,
+    pub metadata: Value,
+    pub byte_size: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Workspace {
     pub name: String,
     pub description: Option<String>,
