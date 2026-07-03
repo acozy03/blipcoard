@@ -88,6 +88,26 @@ These operations must go through `blipd` once the daemon API exists:
 - policy or privacy setting changes
 - rich payload preview, export, or raw byte access in later phases
 
+Rich payload inspection is additive on the existing list/detail responses. A
+blip may include `payloads` summaries with:
+
+- `payload_kind`
+- `mime_type`
+- `platform_format`
+- `byte_size`
+- `preview_state`
+- `preview_text`
+- opaque `preview_ref`
+- `has_blob`
+- `has_inline_text`
+- bounded `metadata_summary`
+
+Default list/detail responses must stay safe and lightweight. They do not return
+raw payload bytes, `blob_ref`, filesystem blob paths, or executable rich markup.
+Missing backing blobs are represented as `preview_state = "missing_blob"`;
+redacted blips use `preview_state = "redacted"` and omit sensitive metadata.
+HTML and RTF summaries expose plain text fallback only.
+
 Agent-facing reads are scoped by workspace. The current agent read command,
 `blip agent recent <workspace>`, is daemon-mediated and returns full blip
 content only when that workspace has `agent_access` enabled. The default `inbox`

@@ -197,6 +197,7 @@ dependencies = [
  "blip-config",
  "blip-core",
  "chrono",
+ "image",
  "serde_json",
  "thiserror",
 ]

@@ -200,6 +200,20 @@ Phase 8.4 file-list and rich-text behavior:
   file read, rich markup render, or external opener action requires explicit
   user or policy-approved access
 
+Phase 8.5 safe preview behavior:
+
+- image captures generate bounded local PNG thumbnails referenced separately
+  from full payload blobs
+- list and detail responses expose payload summaries and explicit preview states
+  without loading raw binary payloads by default
+- CLI summaries show payload kind and preview state flags for non-text payloads
+  while keeping one-line, shell-friendly human output
+- desktop detail panels render image, file-list, rich-text, unknown, redacted,
+  unavailable, and missing-blob states without executing HTML, loading remote
+  resources, opening copied file references, or using raw blob paths
+- missing or deleted backing blobs are inspection states, not panics or silent
+  text-only downgrades
+
 Out of scope:
 
 - optical character recognition as an ingestion requirement

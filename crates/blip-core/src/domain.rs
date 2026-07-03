@@ -155,6 +155,21 @@ pub struct ClipboardPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipboardPayloadSummary {
+    pub id: String,
+    pub blip_id: String,
+    pub kind: PayloadKind,
+    pub mime_type: Option<String>,
+    pub platform_format: Option<String>,
+    pub byte_size: i64,
+    pub preview_ref: Option<String>,
+    pub blob_ref: Option<String>,
+    pub inline_text_preview: Option<String>,
+    pub has_inline_text: bool,
+    pub metadata_summary: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewClipboardPayload {
     pub kind: PayloadKind,
     pub mime_type: Option<String>,

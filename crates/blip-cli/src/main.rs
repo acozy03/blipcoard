@@ -407,5 +407,59 @@ fn blip_summary_flags(blip: &blip_api::BlipSummary) -> Vec<String> {
     if blip.tags.iter().any(|tag| tag == blip_core::SECRET_TAG) {
         flags.push("[secret]".to_string());
     }
+    flags.extend(blip.payloads.iter().filter_map(payload_flag));
     flags
+}
+
+fn payload_flag(payload: &blip_api::PayloadSummary) -> Option<String> {
+    if payload.payload_kind == "text" {
+        return None;
+    }
+
+    let mut parts = vec![
+        format!("payload:{}", payload.payload_kind),
+        payload_preview_state(payload.preview_state).to_owned(),
+        format!("id={}", payload.id),
+    ];
+    if let Some(mime_type) = &payload.mime_type {
+        parts.push(format!("mime={mime_type}"));
+    }
+    if let Some(dimensions) = payload_dimensions(payload) {
+        parts.push(format!("dimensions={dimensions}"));
+    }
+    parts.push(format!("size={}", format_payload_bytes(payload.byte_size)));
+
+    Some(format!("[{}]", parts.join(",")))
+}
+
+fn payload_preview_state(state: blip_api::PayloadPreviewState) -> &'static str {
+    match state {
+        blip_api::PayloadPreviewState::Available => "available",
+        blip_api::PayloadPreviewState::TextFallback => "text_fallback",
+        blip_api::PayloadPreviewState::MetadataOnly => "metadata_only",
+        blip_api::PayloadPreviewState::Redacted => "redacted",
+        blip_api::PayloadPreviewState::MissingBlob => "missing_blob",
+        blip_api::PayloadPreviewState::Unsupported => "unsupported",
+        blip_api::PayloadPreviewState::Unavailable => "unavailable",
+    }
+}
+
+fn payload_dimensions(payload: &blip_api::PayloadSummary) -> Option<String> {
+    let width = payload
+        .metadata_summary
+        .get("width")
+        .and_then(serde_json::Value::as_u64)?;
+    let height = payload
+        .metadata_summary
+        .get("height")
+        .and_then(serde_json::Value::as_u64)?;
+    Some(format!("{width}x{height}"))
+}
+
+fn format_payload_bytes(size_bytes: i64) -> String {
+    if size_bytes < 1024 {
+        format!("{size_bytes}B")
+    } else {
+        format!("{:.1}KiB", size_bytes as f64 / 1024.0)
+    }
 }

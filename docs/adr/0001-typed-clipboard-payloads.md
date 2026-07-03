@@ -176,9 +176,32 @@ user-controlled path. Agent access should receive metadata and plain-text
 fallbacks by default; raw rich markup, file contents, and unsafe or unknown
 payload bytes require policy-approved retrieval by id.
 
+Phase 8.5 exposes safe inspection summaries through the daemon API. `BlipSummary`
+and `BlipDetail` may include bounded `payloads` entries with payload kind, MIME
+type, platform format, byte size, preview state, safe preview text, opaque
+`preview_ref`, and a small metadata summary. They must not include raw bytes,
+absolute blob paths, full metadata JSON, or `blob_ref`.
+
+Preview states are explicit so clients do not infer integrity from legacy
+`Blip.content` alone:
+
+- `available`: a safe thumbnail or text preview exists.
+- `text_fallback`: HTML or RTF is shown only as bounded plain text.
+- `metadata_only`: file lists and similar references expose metadata but no raw
+  file content.
+- `redacted`: metadata and preview text are intentionally withheld.
+- `missing_blob`: SQLite metadata exists but the local backing blob is missing.
+- `unsupported`: the platform format was observed but not decoded.
+- `unavailable`: no safe preview could be generated.
+
+Image captures may store a bounded local PNG thumbnail as a `preview_ref`
+separate from the full payload `blob_ref`. Garbage collection and delete logic
+must treat both references as live blob references. List views may use payload
+metadata and preview states, but they must not load raw payload bytes by default.
+
 ## Consequences
 
 This keeps Phase 8 incremental. Search, summaries, agent bundles, and current
-CLI output continue to use the text projection. Rich payload support can be
-introduced by adding blob storage and typed capture without replacing the text
-APIs in the same change.
+CLI output continue to use the text projection, with additive payload summaries
+for richer inspection. Rich payload support can be introduced by adding blob
+storage and typed capture without replacing the text APIs in the same change.

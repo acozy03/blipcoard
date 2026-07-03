@@ -11,7 +11,8 @@ use blip_api::{
     AuditEventSummary, BlipDetail, BlipListResponse, BlipRoutedResponse, BlipSummary,
     CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode,
     DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
-    DaemonVersionResponse, HealthResponse, WorkspaceListResponse, WorkspaceSummary,
+    DaemonVersionResponse, HealthResponse, PayloadPreviewState, PayloadSummary,
+    WorkspaceListResponse, WorkspaceSummary,
 };
 use blip_clipboard::{
     ClipboardError, ClipboardFileList, ClipboardImage, ClipboardPayload, ClipboardRichText,
@@ -23,6 +24,7 @@ use blip_core::{
     NewClipboardPayload, PayloadKind,
 };
 use chrono::Utc;
+use image::GenericImageView;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -31,6 +33,10 @@ use thiserror::Error;
 const PENDING_SOURCE_INTERVAL: Duration = Duration::from_secs(1);
 const DUPLICATE_SUPPRESSION_WINDOW: Duration = Duration::from_secs(2);
 const INBOX_WORKSPACE: &str = "inbox";
+const IMAGE_PREVIEW_MAX_DIMENSION: u32 = 256;
+const PAYLOAD_PREVIEW_TEXT_LIMIT: usize = 4096;
+const PAYLOAD_METADATA_TEXT_LIMIT: usize = 160;
+const FILE_LIST_PREVIEW_PATH_LIMIT: usize = 3;
 
 pub struct DaemonRuntime<S> {
     database_path: PathBuf,
@@ -202,14 +208,21 @@ where
             }
             (DaemonCommand::ListBlips, DaemonRequestPayload::ListBlips { workspace, limit }) => {
                 match self.store.list_blip_summaries(&workspace, limit) {
-                    Ok(blips) => DaemonResponse::ok(
-                        request_id,
-                        command,
-                        DaemonResponsePayload::Blips(BlipListResponse {
-                            workspace,
-                            blips: blips.into_iter().map(blip_summary).collect(),
-                        }),
-                    ),
+                    Ok(blips) => match self.blip_summaries_with_payloads(blips) {
+                        Ok(blips) => DaemonResponse::ok(
+                            request_id,
+                            command,
+                            DaemonResponsePayload::Blips(BlipListResponse { workspace, blips }),
+                        ),
+                        Err(error) => DaemonResponse::error(
+                            request_id,
+                            command,
+                            DaemonApiError::new(
+                                DaemonApiErrorCode::StoreUnavailable,
+                                error.to_string(),
+                            ),
+                        ),
+                    },
                     Err(error) => DaemonResponse::error(
                         request_id,
                         command,
@@ -228,23 +241,40 @@ where
                     limit,
                 },
             ) => match self.store.search_blip_summaries(&workspace, &query, limit) {
-                Ok(blips) => DaemonResponse::ok(
-                    request_id,
-                    command,
-                    DaemonResponsePayload::Blips(BlipListResponse {
-                        workspace,
-                        blips: blips.into_iter().map(blip_summary).collect(),
-                    }),
-                ),
+                Ok(blips) => match self.blip_summaries_with_payloads(blips) {
+                    Ok(blips) => DaemonResponse::ok(
+                        request_id,
+                        command,
+                        DaemonResponsePayload::Blips(BlipListResponse { workspace, blips }),
+                    ),
+                    Err(error) => DaemonResponse::error(
+                        request_id,
+                        command,
+                        DaemonApiError::new(
+                            DaemonApiErrorCode::StoreUnavailable,
+                            error.to_string(),
+                        ),
+                    ),
+                },
                 Err(error) => search_error_response(request_id, command, error),
             },
             (DaemonCommand::GetBlip, DaemonRequestPayload::GetBlip { blip_id }) => {
                 match self.store.get_blip(&blip_id) {
-                    Ok(Some(blip)) => DaemonResponse::ok(
-                        request_id,
-                        command,
-                        DaemonResponsePayload::Blip(blip_detail_from_store(blip)),
-                    ),
+                    Ok(Some(blip)) => match self.blip_detail_from_store(blip) {
+                        Ok(detail) => DaemonResponse::ok(
+                            request_id,
+                            command,
+                            DaemonResponsePayload::Blip(detail),
+                        ),
+                        Err(error) => DaemonResponse::error(
+                            request_id,
+                            command,
+                            DaemonApiError::new(
+                                DaemonApiErrorCode::StoreUnavailable,
+                                error.to_string(),
+                            ),
+                        ),
+                    },
                     Ok(None) => DaemonResponse::error(
                         request_id,
                         command,
@@ -466,6 +496,7 @@ where
         })?;
 
         let blob_store = LocalBlobStore::new(self.blob_data_dir());
+        let image_preview = create_image_preview_blob(&blob_store, &image.bytes)?;
         self.store.insert_blob_payload(
             &blip.id,
             &NewClipboardPayload {
@@ -473,11 +504,22 @@ where
                 mime_type: Some(image.mime_type),
                 platform_format: image.platform_format,
                 source_app: None,
-                preview_ref: None,
+                preview_ref: image_preview
+                    .as_ref()
+                    .map(|preview| preview.blob_ref.clone()),
                 inline_text: None,
                 metadata: serde_json::json!({
                     "width": image.width,
                     "height": image.height,
+                    "preview": image_preview.as_ref().map(|preview| {
+                        serde_json::json!({
+                            "mime_type": "image/png",
+                            "width": preview.width,
+                            "height": preview.height,
+                            "byte_size": preview.byte_size,
+                            "max_dimension": IMAGE_PREVIEW_MAX_DIMENSION,
+                        })
+                    }),
                 }),
                 bytes: image.bytes,
             },
@@ -663,32 +705,462 @@ where
             .parent()
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
     }
-}
 
-fn blip_detail_from_store(blip: Blip) -> BlipDetail {
-    BlipDetail {
-        id: blip.id,
-        workspace: blip.workspace_name,
-        source_app: blip.source_app,
-        content_type: blip.content_type.as_str().to_owned(),
-        language: blip.language,
-        content: blip.content,
-        size_bytes: blip.size_bytes,
-        token_estimate: blip.token_estimate,
-        is_redacted: blip.is_redacted,
-        tags: blip.tags,
-        created_at: blip.created_at,
+    fn blip_summaries_with_payloads(
+        &self,
+        blips: Vec<blip_core::BlipSummary>,
+    ) -> Result<Vec<BlipSummary>, BlipError> {
+        let blob_store = LocalBlobStore::new(self.blob_data_dir());
+        let blip_ids = blips.iter().map(|blip| blip.id.clone()).collect::<Vec<_>>();
+        let mut payloads_by_blip_id = self.store.get_blip_payload_summaries_for_blips(&blip_ids)?;
+        blips
+            .into_iter()
+            .map(|blip| {
+                let payloads = payloads_by_blip_id.remove(&blip.id).unwrap_or_default();
+                let is_redacted = blip.is_redacted;
+                Ok(blip_summary(
+                    blip,
+                    payload_summaries_from_projections(&payloads, &blob_store, is_redacted)?,
+                ))
+            })
+            .collect()
+    }
+
+    fn blip_detail_from_store(&self, blip: Blip) -> Result<BlipDetail, BlipError> {
+        let payloads = self.store.get_blip_payloads(&blip.id)?;
+        let blob_store = LocalBlobStore::new(self.blob_data_dir());
+        Ok(BlipDetail {
+            id: blip.id,
+            workspace: blip.workspace_name,
+            source_app: blip.source_app,
+            content_type: blip.content_type.as_str().to_owned(),
+            language: blip.language,
+            content: blip.content,
+            size_bytes: blip.size_bytes,
+            token_estimate: blip.token_estimate,
+            is_redacted: blip.is_redacted,
+            tags: blip.tags,
+            created_at: blip.created_at,
+            payloads: payload_summaries(&payloads, &blob_store, blip.is_redacted)?,
+        })
     }
 }
 
-fn blip_summary(blip: blip_core::BlipSummary) -> BlipSummary {
+fn blip_summary(blip: blip_core::BlipSummary, payloads: Vec<PayloadSummary>) -> BlipSummary {
     BlipSummary {
         id: blip.id,
         preview: blip.preview,
         size_bytes: blip.size_bytes,
         is_redacted: blip.is_redacted,
         tags: blip.tags,
+        payloads,
     }
+}
+
+fn payload_summaries(
+    payloads: &[blip_core::ClipboardPayload],
+    blob_store: &LocalBlobStore,
+    redacted: bool,
+) -> Result<Vec<PayloadSummary>, BlipError> {
+    payloads
+        .iter()
+        .map(|payload| payload_summary(payload, blob_store, redacted))
+        .collect()
+}
+
+fn payload_summaries_from_projections(
+    payloads: &[blip_core::ClipboardPayloadSummary],
+    blob_store: &LocalBlobStore,
+    redacted: bool,
+) -> Result<Vec<PayloadSummary>, BlipError> {
+    payloads
+        .iter()
+        .map(|payload| payload_summary_from_projection(payload, blob_store, redacted))
+        .collect()
+}
+
+fn payload_summary_from_projection(
+    payload: &blip_core::ClipboardPayloadSummary,
+    blob_store: &LocalBlobStore,
+    redacted: bool,
+) -> Result<PayloadSummary, BlipError> {
+    let has_blob = payload.blob_ref.is_some();
+    let blob_missing = match payload.blob_ref.as_deref() {
+        Some(blob_ref) => !blob_store.exists(blob_ref)?,
+        None => false,
+    };
+    let preview_missing = match payload.preview_ref.as_deref() {
+        Some(preview_ref) => !blob_store.exists(preview_ref)?,
+        None => false,
+    };
+
+    let preview_state = payload_preview_state(
+        payload.kind,
+        payload.has_inline_text,
+        payload.preview_ref.is_some(),
+        redacted,
+        blob_missing,
+        preview_missing,
+    );
+
+    Ok(PayloadSummary {
+        id: payload.id.clone(),
+        payload_kind: payload.kind.as_str().to_owned(),
+        mime_type: payload.mime_type.clone(),
+        platform_format: payload.platform_format.clone(),
+        byte_size: payload.byte_size,
+        preview_state,
+        preview_text: safe_projected_payload_preview_text(payload, redacted),
+        preview_ref: if redacted {
+            None
+        } else {
+            payload.preview_ref.clone()
+        },
+        has_blob,
+        has_inline_text: payload.has_inline_text,
+        metadata_summary: projected_metadata_summary(payload, redacted),
+    })
+}
+
+fn payload_summary(
+    payload: &blip_core::ClipboardPayload,
+    blob_store: &LocalBlobStore,
+    redacted: bool,
+) -> Result<PayloadSummary, BlipError> {
+    let has_blob = payload.blob_ref.is_some();
+    let blob_missing = match payload.blob_ref.as_deref() {
+        Some(blob_ref) => !blob_store.exists(blob_ref)?,
+        None => false,
+    };
+    let preview_missing = match payload.preview_ref.as_deref() {
+        Some(preview_ref) => !blob_store.exists(preview_ref)?,
+        None => false,
+    };
+
+    let preview_state = payload_preview_state(
+        payload.kind,
+        payload.inline_text.is_some(),
+        payload.preview_ref.is_some(),
+        redacted,
+        blob_missing,
+        preview_missing,
+    );
+
+    Ok(PayloadSummary {
+        id: payload.id.clone(),
+        payload_kind: payload.kind.as_str().to_owned(),
+        mime_type: payload.mime_type.clone(),
+        platform_format: payload.platform_format.clone(),
+        byte_size: payload.byte_size,
+        preview_state,
+        preview_text: safe_payload_preview_text(payload, redacted),
+        preview_ref: if redacted {
+            None
+        } else {
+            payload.preview_ref.clone()
+        },
+        has_blob,
+        has_inline_text: payload.inline_text.is_some(),
+        metadata_summary: metadata_summary(payload, redacted),
+    })
+}
+
+fn payload_preview_state(
+    kind: PayloadKind,
+    has_inline_text: bool,
+    has_preview_ref: bool,
+    redacted: bool,
+    blob_missing: bool,
+    preview_missing: bool,
+) -> PayloadPreviewState {
+    if redacted {
+        PayloadPreviewState::Redacted
+    } else if blob_missing {
+        PayloadPreviewState::MissingBlob
+    } else if preview_missing {
+        PayloadPreviewState::Unavailable
+    } else {
+        match kind {
+            PayloadKind::Text => PayloadPreviewState::Available,
+            PayloadKind::Html | PayloadKind::Rtf if has_inline_text => {
+                PayloadPreviewState::TextFallback
+            }
+            PayloadKind::Image if has_preview_ref => PayloadPreviewState::Available,
+            PayloadKind::Image => PayloadPreviewState::Unavailable,
+            PayloadKind::FileList => PayloadPreviewState::MetadataOnly,
+            PayloadKind::Unknown => PayloadPreviewState::Unsupported,
+            PayloadKind::Html | PayloadKind::Rtf => PayloadPreviewState::Unavailable,
+        }
+    }
+}
+
+fn safe_payload_preview_text(
+    payload: &blip_core::ClipboardPayload,
+    redacted: bool,
+) -> Option<String> {
+    if redacted {
+        return Some("[redacted]".to_owned());
+    }
+
+    match payload.kind {
+        PayloadKind::Text | PayloadKind::Html | PayloadKind::Rtf => payload
+            .inline_text
+            .as_deref()
+            .map(|text| truncate_chars(text.trim(), PAYLOAD_PREVIEW_TEXT_LIMIT)),
+        PayloadKind::Image => Some(image_payload_description(payload)),
+        PayloadKind::FileList => Some(file_list_payload_description(payload)),
+        PayloadKind::Unknown => Some(unknown_payload_description(payload)),
+    }
+}
+
+fn safe_projected_payload_preview_text(
+    payload: &blip_core::ClipboardPayloadSummary,
+    redacted: bool,
+) -> Option<String> {
+    if redacted {
+        return Some("[redacted]".to_owned());
+    }
+
+    match payload.kind {
+        PayloadKind::Text | PayloadKind::Html | PayloadKind::Rtf => payload
+            .inline_text_preview
+            .as_deref()
+            .map(|text| truncate_chars(text.trim(), PAYLOAD_PREVIEW_TEXT_LIMIT)),
+        PayloadKind::Image => Some(projected_image_payload_description(payload)),
+        PayloadKind::FileList => Some(projected_file_list_payload_description(payload)),
+        PayloadKind::Unknown => Some(projected_unknown_payload_description(payload)),
+    }
+}
+
+fn metadata_summary(payload: &blip_core::ClipboardPayload, redacted: bool) -> serde_json::Value {
+    if redacted {
+        return serde_json::json!({
+            "policy": "redacted",
+        });
+    }
+
+    match payload.kind {
+        PayloadKind::Image => serde_json::json!({
+            "width": payload.metadata.get("width").and_then(serde_json::Value::as_u64),
+            "height": payload.metadata.get("height").and_then(serde_json::Value::as_u64),
+            "preview": payload.metadata.get("preview").cloned().unwrap_or(serde_json::Value::Null),
+        }),
+        PayloadKind::FileList => {
+            let paths = payload
+                .metadata
+                .get("paths")
+                .and_then(serde_json::Value::as_array)
+                .map(|paths| {
+                    paths
+                        .iter()
+                        .take(FILE_LIST_PREVIEW_PATH_LIMIT)
+                        .filter_map(|path| {
+                            path.get("display_path").and_then(serde_json::Value::as_str)
+                        })
+                        .map(|path| truncate_chars(path, PAYLOAD_METADATA_TEXT_LIMIT))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            serde_json::json!({
+                "policy": payload.metadata.get("policy").cloned().unwrap_or(serde_json::Value::Null),
+                "path_count": payload.metadata.get("path_count").and_then(serde_json::Value::as_u64),
+                "paths": paths,
+            })
+        }
+        PayloadKind::Html | PayloadKind::Rtf => serde_json::json!({
+            "fallback": payload.metadata.get("fallback").cloned().unwrap_or(serde_json::Value::Null),
+            "render_policy": "plain_text_only",
+        }),
+        PayloadKind::Unknown => serde_json::json!({
+            "policy": payload.metadata.get("policy").cloned().unwrap_or(serde_json::Value::Null),
+        }),
+        PayloadKind::Text => serde_json::json!({}),
+    }
+}
+
+fn projected_metadata_summary(
+    payload: &blip_core::ClipboardPayloadSummary,
+    redacted: bool,
+) -> serde_json::Value {
+    if redacted {
+        return serde_json::json!({
+            "policy": "redacted",
+        });
+    }
+
+    match payload.kind {
+        PayloadKind::Image => serde_json::json!({
+            "width": payload.metadata_summary.get("width").and_then(serde_json::Value::as_u64),
+            "height": payload.metadata_summary.get("height").and_then(serde_json::Value::as_u64),
+            "preview": payload.metadata_summary.get("preview").cloned().unwrap_or(serde_json::Value::Null),
+        }),
+        PayloadKind::FileList => {
+            let paths = ["path0", "path1", "path2"]
+                .iter()
+                .filter_map(|key| {
+                    payload
+                        .metadata_summary
+                        .get(key)
+                        .and_then(serde_json::Value::as_str)
+                })
+                .map(|path| truncate_chars(path, PAYLOAD_METADATA_TEXT_LIMIT))
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "policy": payload.metadata_summary.get("policy").cloned().unwrap_or(serde_json::Value::Null),
+                "path_count": payload.metadata_summary.get("path_count").and_then(serde_json::Value::as_u64),
+                "paths": paths,
+            })
+        }
+        PayloadKind::Html | PayloadKind::Rtf => serde_json::json!({
+            "fallback": payload.metadata_summary.get("fallback").cloned().unwrap_or(serde_json::Value::Null),
+            "render_policy": "plain_text_only",
+        }),
+        PayloadKind::Unknown => serde_json::json!({
+            "policy": payload.metadata_summary.get("policy").cloned().unwrap_or(serde_json::Value::Null),
+        }),
+        PayloadKind::Text => serde_json::json!({}),
+    }
+}
+
+fn image_payload_description(payload: &blip_core::ClipboardPayload) -> String {
+    let width = payload
+        .metadata
+        .get("width")
+        .and_then(serde_json::Value::as_u64);
+    let height = payload
+        .metadata
+        .get("height")
+        .and_then(serde_json::Value::as_u64);
+    match (payload.mime_type.as_deref(), width, height) {
+        (Some(mime_type), Some(width), Some(height)) => {
+            format!(
+                "{mime_type} {width}x{height} {}",
+                format_bytes(payload.byte_size)
+            )
+        }
+        (Some(mime_type), _, _) => format!("{mime_type} {}", format_bytes(payload.byte_size)),
+        _ => format!("image {}", format_bytes(payload.byte_size)),
+    }
+}
+
+fn projected_image_payload_description(payload: &blip_core::ClipboardPayloadSummary) -> String {
+    let width = payload
+        .metadata_summary
+        .get("width")
+        .and_then(serde_json::Value::as_u64);
+    let height = payload
+        .metadata_summary
+        .get("height")
+        .and_then(serde_json::Value::as_u64);
+    match (payload.mime_type.as_deref(), width, height) {
+        (Some(mime_type), Some(width), Some(height)) => {
+            format!(
+                "{mime_type} {width}x{height} {}",
+                format_bytes(payload.byte_size)
+            )
+        }
+        (Some(mime_type), _, _) => format!("{mime_type} {}", format_bytes(payload.byte_size)),
+        _ => format!("image {}", format_bytes(payload.byte_size)),
+    }
+}
+
+fn file_list_payload_description(payload: &blip_core::ClipboardPayload) -> String {
+    let path_count = payload
+        .metadata
+        .get("path_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let suffix = if path_count == 1 { "" } else { "s" };
+    format!("{path_count} file reference{suffix}")
+}
+
+fn projected_file_list_payload_description(payload: &blip_core::ClipboardPayloadSummary) -> String {
+    let path_count = payload
+        .metadata_summary
+        .get("path_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let suffix = if path_count == 1 { "" } else { "s" };
+    format!("{path_count} file reference{suffix}")
+}
+
+fn unknown_payload_description(payload: &blip_core::ClipboardPayload) -> String {
+    let format = payload
+        .platform_format
+        .as_deref()
+        .or(payload.mime_type.as_deref())
+        .unwrap_or("unknown format");
+    format!(
+        "{} {}",
+        truncate_chars(format, PAYLOAD_METADATA_TEXT_LIMIT),
+        format_bytes(payload.byte_size)
+    )
+}
+
+fn projected_unknown_payload_description(payload: &blip_core::ClipboardPayloadSummary) -> String {
+    let format = payload
+        .platform_format
+        .as_deref()
+        .or(payload.mime_type.as_deref())
+        .unwrap_or("unknown format");
+    format!(
+        "{} {}",
+        truncate_chars(format, PAYLOAD_METADATA_TEXT_LIMIT),
+        format_bytes(payload.byte_size)
+    )
+}
+
+fn format_bytes(size_bytes: i64) -> String {
+    if size_bytes < 1024 {
+        format!("{size_bytes} B")
+    } else {
+        format!("{:.1} KiB", size_bytes as f64 / 1024.0)
+    }
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
+struct ImagePreview {
+    blob_ref: String,
+    width: u32,
+    height: u32,
+    byte_size: u64,
+}
+
+fn create_image_preview_blob(
+    blob_store: &LocalBlobStore,
+    bytes: &[u8],
+) -> Result<Option<ImagePreview>, BlipError> {
+    let Ok(image) = image::load_from_memory(bytes) else {
+        return Ok(None);
+    };
+
+    let preview = image.thumbnail(IMAGE_PREVIEW_MAX_DIMENSION, IMAGE_PREVIEW_MAX_DIMENSION);
+    let (width, height) = preview.dimensions();
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    preview
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .map_err(|_| BlipError::InvalidInput {
+            field: "payload.preview",
+            reason: "failed to encode thumbnail",
+        })?;
+    let preview_bytes = cursor.into_inner();
+    let metadata = blob_store.write(&preview_bytes)?;
+
+    Ok(Some(ImagePreview {
+        blob_ref: metadata.blob_ref,
+        width,
+        height,
+        byte_size: metadata.byte_size,
+    }))
 }
 
 fn render_agent_bundle(workspace: &str, blips: &[Blip]) -> String {
@@ -1359,11 +1831,24 @@ mod tests {
             Some(DaemonResponsePayload::Blips(BlipListResponse {
                 workspace: "inbox".to_owned(),
                 blips: vec![BlipSummary {
-                    id: inserted.id,
+                    id: inserted.id.clone(),
                     preview: "copied text".to_owned(),
                     size_bytes: 11,
                     is_redacted: false,
                     tags: vec!["type:plain_text".to_owned()],
+                    payloads: vec![PayloadSummary {
+                        id: format!("{}:payload:text", inserted.id),
+                        payload_kind: "text".to_owned(),
+                        mime_type: Some("text/plain".to_owned()),
+                        platform_format: None,
+                        byte_size: 11,
+                        preview_state: PayloadPreviewState::Available,
+                        preview_text: Some("copied text".to_owned()),
+                        preview_ref: None,
+                        has_blob: false,
+                        has_inline_text: true,
+                        metadata_summary: serde_json::json!({}),
+                    }],
                 }],
             })),
         );
@@ -1421,11 +1906,24 @@ mod tests {
             Some(DaemonResponsePayload::Blips(BlipListResponse {
                 workspace: "inbox".to_owned(),
                 blips: vec![BlipSummary {
-                    id: inserted.id,
+                    id: inserted.id.clone(),
                     preview: "login callback timeout".to_owned(),
                     size_bytes: 22,
                     is_redacted: false,
                     tags: vec!["type:plain_text".to_owned()],
+                    payloads: vec![PayloadSummary {
+                        id: format!("{}:payload:text", inserted.id),
+                        payload_kind: "text".to_owned(),
+                        mime_type: Some("text/plain".to_owned()),
+                        platform_format: None,
+                        byte_size: 22,
+                        preview_state: PayloadPreviewState::Available,
+                        preview_text: Some("login callback timeout".to_owned()),
+                        preview_ref: None,
+                        has_blob: false,
+                        has_inline_text: true,
+                        metadata_summary: serde_json::json!({}),
+                    }],
                 }],
             })),
         );
@@ -1496,7 +1994,7 @@ mod tests {
         assert_eq!(
             response.payload,
             Some(DaemonResponsePayload::Blip(BlipDetail {
-                id: inserted.id,
+                id: inserted.id.clone(),
                 workspace: "inbox".to_owned(),
                 source_app: Some("Firefox".to_owned()),
                 content_type: "plain_text".to_owned(),
@@ -1507,6 +2005,21 @@ mod tests {
                 is_redacted: true,
                 tags: vec!["demo".to_owned(), "type:plain_text".to_owned()],
                 created_at: inserted.created_at,
+                payloads: vec![PayloadSummary {
+                    id: format!("{}:payload:text", inserted.id),
+                    payload_kind: "text".to_owned(),
+                    mime_type: Some("text/plain".to_owned()),
+                    platform_format: None,
+                    byte_size: 21,
+                    preview_state: PayloadPreviewState::Redacted,
+                    preview_text: Some("[redacted]".to_owned()),
+                    preview_ref: None,
+                    has_blob: false,
+                    has_inline_text: true,
+                    metadata_summary: serde_json::json!({
+                        "policy": "redacted",
+                    }),
+                }],
             })),
         );
     }
@@ -2139,6 +2652,134 @@ mod tests {
     }
 
     #[test]
+    fn runtime_generates_bounded_image_preview_blob() {
+        let root = unique_temp_dir("blipcoard-image-preview");
+        std::fs::create_dir_all(&root).expect("temp root should create");
+        let db_path = root.join("blipcoard.db");
+        let image = sample_png_clipboard_image(512, 128);
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let source = ScriptedIngestionSource {
+            events: vec![
+                RuntimeEvent::Shutdown,
+                RuntimeEvent::ClipboardImageChanged { image },
+            ],
+            calls: 0,
+        };
+        let mut runtime = DaemonRuntime::new(&db_path, store, source);
+
+        runtime
+            .run()
+            .expect("runtime should ingest clipboard image");
+
+        let blips = runtime
+            .store
+            .list_blips("inbox")
+            .expect("inbox blips should be listed");
+        let payloads = runtime
+            .store
+            .get_blip_payloads(&blips[0].id)
+            .expect("payloads should list");
+        let image_payload = payloads
+            .iter()
+            .find(|payload| payload.kind == PayloadKind::Image)
+            .expect("image payload should be stored");
+        let preview_ref = image_payload
+            .preview_ref
+            .as_deref()
+            .expect("preview ref should be generated");
+
+        assert_eq!(image_payload.metadata["preview"]["width"], 256);
+        assert_eq!(image_payload.metadata["preview"]["height"], 64);
+        assert_eq!(
+            image_payload.metadata["preview"]["max_dimension"],
+            IMAGE_PREVIEW_MAX_DIMENSION
+        );
+        assert!(
+            LocalBlobStore::new(&root)
+                .exists(preview_ref)
+                .expect("preview blob should stat")
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dispatch_reports_missing_blob_preview_state() {
+        let root = unique_temp_dir("blipcoard-missing-blob");
+        std::fs::create_dir_all(&root).expect("temp root should create");
+        let db_path = root.join("blipcoard.db");
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let blip = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".to_owned(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "Unknown clipboard payload: test/custom (12 bytes)".to_owned(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: vec!["clipboard:unknown".to_owned()],
+            })
+            .expect("blip should insert");
+        let blob_store = LocalBlobStore::new(&root);
+        let payload = store
+            .insert_blob_payload(
+                &blip.id,
+                &NewClipboardPayload {
+                    kind: PayloadKind::Unknown,
+                    mime_type: Some("application/octet-stream".to_owned()),
+                    platform_format: Some("test/custom".to_owned()),
+                    source_app: None,
+                    preview_ref: None,
+                    inline_text: None,
+                    metadata: serde_json::json!({
+                        "policy": "unsupported_format",
+                    }),
+                    bytes: b"payload bytes".to_vec(),
+                },
+                &blob_store,
+            )
+            .expect("blob payload should insert");
+        blob_store
+            .delete(
+                payload
+                    .blob_ref
+                    .as_deref()
+                    .expect("payload blob should exist"),
+            )
+            .expect("blob delete should work");
+
+        let mut runtime = DaemonRuntime::new(
+            &db_path,
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "get-missing-blob",
+            DaemonCommand::GetBlip,
+            DaemonRequestPayload::GetBlip { blip_id: blip.id },
+        ));
+
+        let Some(DaemonResponsePayload::Blip(detail)) = response.payload else {
+            panic!("expected blip detail response");
+        };
+        let unknown_payload = detail
+            .payloads
+            .iter()
+            .find(|payload| payload.payload_kind == "unknown")
+            .expect("unknown payload summary should be present");
+        assert_eq!(
+            unknown_payload.preview_state,
+            PayloadPreviewState::MissingBlob
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn runtime_persists_file_list_events_as_metadata_only_payloads() {
         let store = BlipStore::in_memory().expect("store should initialize");
         let source = ScriptedIngestionSource {
@@ -2496,6 +3137,24 @@ mod tests {
             width: 1,
             height: 1,
             byte_size: 8,
+            platform_format: Some("test:image".to_owned()),
+        }
+    }
+
+    fn sample_png_clipboard_image(width: u32, height: u32) -> ClipboardImage {
+        let image = image::ImageBuffer::from_pixel(width, height, image::Rgba([20, 80, 120, 255]));
+        let dynamic_image = image::DynamicImage::ImageRgba8(image);
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        dynamic_image
+            .write_to(&mut cursor, image::ImageFormat::Png)
+            .expect("png fixture should encode");
+        let bytes = cursor.into_inner();
+        ClipboardImage {
+            byte_size: bytes.len(),
+            bytes,
+            mime_type: "image/png".to_owned(),
+            width,
+            height,
             platform_format: Some("test:image".to_owned()),
         }
     }
