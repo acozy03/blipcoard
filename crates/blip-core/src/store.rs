@@ -420,8 +420,10 @@ impl BlipStore {
     ) -> Result<ClipboardPayload, BlipError> {
         validate_blob_payload(payload)?;
 
-        let metadata = blob_store.write(&payload.bytes)?;
-        self.insert_blob_payload_metadata(blip_id, payload, &metadata)
+        blob_store.with_lock(|| {
+            let metadata = blob_store.write_unlocked(&payload.bytes)?;
+            self.insert_blob_payload_metadata(blip_id, payload, &metadata)
+        })
     }
 
     fn insert_blob_payload_metadata(
@@ -500,18 +502,30 @@ impl BlipStore {
         blob_store: &LocalBlobStore,
         blip_id: &str,
     ) -> Result<bool, BlipError> {
-        let deleted_blob_refs = self.delete_blip_and_return_blob_refs(blip_id)?;
-        if deleted_blob_refs.is_empty() {
-            return Ok(false);
-        }
-
-        for blob_ref in deleted_blob_refs {
-            if !self.is_blob_ref_referenced(&blob_ref)? {
-                blob_store.delete(&blob_ref)?;
+        blob_store.with_lock(|| {
+            let deleted_blob_refs = self.delete_blip_and_return_blob_refs(blip_id)?;
+            if deleted_blob_refs.is_empty() {
+                return Ok(false);
             }
-        }
 
-        Ok(true)
+            for blob_ref in deleted_blob_refs {
+                if !self.is_blob_ref_referenced(&blob_ref)? {
+                    blob_store.delete_unlocked(&blob_ref)?;
+                }
+            }
+
+            Ok(true)
+        })
+    }
+
+    pub fn garbage_collect_blobs(
+        &self,
+        blob_store: &LocalBlobStore,
+    ) -> Result<crate::BlobGcReport, BlipError> {
+        blob_store.with_lock(|| {
+            let referenced_blob_refs = self.referenced_blob_refs()?;
+            blob_store.garbage_collect_unlocked(&referenced_blob_refs)
+        })
     }
 
     fn delete_blip_and_return_blob_refs(
@@ -1655,8 +1669,8 @@ mod tests {
             .expect("referenced payload should have blob ref")
             .to_owned();
 
-        let report = blob_store
-            .garbage_collect(&store.referenced_blob_refs().expect("refs should list"))
+        let report = store
+            .garbage_collect_blobs(&blob_store)
             .expect("gc should work");
 
         assert_eq!(report.removed, vec![orphan.blob_ref]);

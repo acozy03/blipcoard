@@ -1,13 +1,15 @@
 use crate::BlipError;
+use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
 const BLOB_DIR: &str = "blobs";
+const LOCK_FILE: &str = ".lock";
 const TMP_DIR: &str = "tmp";
 const SHA256_PREFIX: &str = "sha256";
 const DEFAULT_MAX_BLOB_BYTES: u64 = 100 * 1024 * 1024;
@@ -55,10 +57,27 @@ impl LocalBlobStore {
     }
 
     pub fn recover(&self) -> Result<(), BlipError> {
-        self.recover_stale_tmp_files(STALE_TMP_FILE_AGE)
+        self.with_lock(|| self.recover_stale_tmp_files(STALE_TMP_FILE_AGE))
     }
 
-    fn recover_stale_tmp_files(&self, min_age: Duration) -> Result<(), BlipError> {
+    pub(crate) fn with_lock<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, BlipError>,
+    ) -> Result<T, BlipError> {
+        fs::create_dir_all(&self.root)?;
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.root.join(LOCK_FILE))?;
+        lock_file.lock_exclusive()?;
+        let result = operation();
+        lock_file.unlock()?;
+        result
+    }
+
+    pub(crate) fn recover_stale_tmp_files(&self, min_age: Duration) -> Result<(), BlipError> {
         let tmp_dir = self.tmp_dir();
         fs::create_dir_all(&tmp_dir)?;
         let now = SystemTime::now();
@@ -75,6 +94,10 @@ impl LocalBlobStore {
     }
 
     pub fn write(&self, bytes: &[u8]) -> Result<BlobMetadata, BlipError> {
+        self.with_lock(|| self.write_unlocked(bytes))
+    }
+
+    pub(crate) fn write_unlocked(&self, bytes: &[u8]) -> Result<BlobMetadata, BlipError> {
         let byte_size = u64::try_from(bytes.len()).map_err(|_| BlipError::BlobTooLarge {
             size_bytes: u64::MAX,
             max_bytes: self.max_blob_bytes,
@@ -87,7 +110,7 @@ impl LocalBlobStore {
             });
         }
 
-        self.recover()?;
+        self.recover_stale_tmp_files(STALE_TMP_FILE_AGE)?;
 
         let hash = sha256_hex(bytes);
         let blob_ref = blob_ref_for_hash(&hash);
@@ -167,6 +190,10 @@ impl LocalBlobStore {
     }
 
     pub fn delete(&self, blob_ref: &str) -> Result<bool, BlipError> {
+        self.with_lock(|| self.delete_unlocked(blob_ref))
+    }
+
+    pub(crate) fn delete_unlocked(&self, blob_ref: &str) -> Result<bool, BlipError> {
         let path = self.path_for_ref(blob_ref)?;
         match fs::remove_file(path) {
             Ok(()) => Ok(true),
@@ -179,11 +206,18 @@ impl LocalBlobStore {
         &self,
         referenced_blob_refs: &HashSet<String>,
     ) -> Result<BlobGcReport, BlipError> {
-        self.recover()?;
+        self.with_lock(|| self.garbage_collect_unlocked(referenced_blob_refs))
+    }
+
+    pub(crate) fn garbage_collect_unlocked(
+        &self,
+        referenced_blob_refs: &HashSet<String>,
+    ) -> Result<BlobGcReport, BlipError> {
+        self.recover_stale_tmp_files(STALE_TMP_FILE_AGE)?;
 
         let mut removed = Vec::new();
         for blob_ref in self.list_blob_refs()? {
-            if !referenced_blob_refs.contains(&blob_ref) && self.delete(&blob_ref)? {
+            if !referenced_blob_refs.contains(&blob_ref) && self.delete_unlocked(&blob_ref)? {
                 removed.push(blob_ref);
             }
         }
