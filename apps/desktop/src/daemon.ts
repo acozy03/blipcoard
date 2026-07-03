@@ -45,6 +45,19 @@ export type PayloadSummary = {
   metadata_summary: unknown;
 };
 
+export type PayloadRequester = "cli" | "desktop" | "agent";
+
+export type PayloadBytesResponse = {
+  payload_id: string;
+  blip_id: string;
+  workspace: string;
+  payload_kind: string;
+  mime_type: string | null;
+  platform_format: string | null;
+  byte_size: number;
+  bytes: number[];
+};
+
 export type AuditEventSummary = {
   id: string;
   actor_type: string;
@@ -428,6 +441,54 @@ export async function getBlip(blipId: string): Promise<BlipDetail> {
   }
 
   return blip;
+}
+
+export async function getPayloadMetadata(payloadId: string): Promise<PayloadSummary> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    return invoke<PayloadSummary>("get_payload_metadata", { payload_id: payloadId });
+  }
+
+  await devDelay();
+  for (const detail of Object.values(DEV_DETAILS)) {
+    const payload = detail.payloads?.find((candidate) => candidate.id === payloadId);
+    if (payload) {
+      return payload;
+    }
+  }
+
+  throw new Error(`payload \`${payloadId}\` does not exist`);
+}
+
+export async function getPayloadPreview(payloadId: string): Promise<PayloadBytesResponse> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    const requester: PayloadRequester = "desktop";
+    return invoke<PayloadBytesResponse>("get_payload_preview", {
+      payload_id: payloadId,
+      requester
+    });
+  }
+
+  await devDelay();
+  throw new Error(`payload preview is unavailable in desktop dev mode for ${payloadId}`);
+}
+
+export async function exportPayload(payloadId: string): Promise<PayloadBytesResponse> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    const requester: PayloadRequester = "desktop";
+    return invoke<PayloadBytesResponse>("export_payload", {
+      payload_id: payloadId,
+      requester
+    });
+  }
+
+  await devDelay();
+  throw new Error(`payload export is unavailable in desktop dev mode for ${payloadId}`);
 }
 
 export async function listAuditEvents(limit = 25): Promise<AuditEventListResponse> {

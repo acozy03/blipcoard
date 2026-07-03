@@ -86,7 +86,7 @@ These operations must go through `blipd` once the daemon API exists:
 - blip routing and move operations
 - audit log reads
 - policy or privacy setting changes
-- rich payload preview, export, or raw byte access in later phases
+- rich payload preview, export, or raw byte access
 
 Rich payload inspection is additive on the existing list/detail responses. A
 blip may include `payloads` summaries with:
@@ -119,6 +119,39 @@ Workspace summaries include the active rich payload policy fields:
 daemon list/detail responses for that workspace. Ordinary list/detail calls do
 not emit payload preview/export/read audit events because they do not dereference
 blob bytes.
+
+Explicit byte retrieval uses dedicated daemon commands:
+
+- `get_payload_metadata` returns the same bounded `PayloadSummary` shape for one
+  payload id and never returns raw bytes or blob paths.
+- `get_payload_preview` returns policy-checked preview bytes for one payload id
+  when a safe preview blob exists.
+- `export_payload` returns policy-checked raw payload bytes for one payload id
+  when the stored payload has a backing blob.
+
+The byte response includes payload id, owning blip id, workspace, payload kind,
+MIME type, platform format, byte size, and bytes. Current JSON IPC encodes bytes
+as a numeric byte array so clients do not write binary data to stdout by
+accident. The CLI writes those bytes only to the requested path and refuses to
+overwrite existing files unless `--force` is set.
+
+Preview and export commands must apply the same workspace policy for desktop,
+CLI, and agent callers. CLI and desktop preview reads require
+`rich_payload_visibility = "safe_preview"`. Raw exports require both text agent
+access and `agent_raw_payload_access = true`; they are denied by default. CLI
+and desktop raw exports are also denied when rich payload visibility is `hidden`.
+The daemon treats client-supplied requester labels as audit context, not as
+authorization facts. Successful, denied, and missing-blob byte reads record
+dedicated payload audit events. Missing payloads are returned as `not_found`
+without writing a payload access audit event.
+
+Payload byte commands return typed errors for:
+
+- `access_denied` when workspace policy blocks the caller.
+- `missing_blob` when SQLite references a blob that is absent locally.
+- `unsupported_payload` when the payload has no retrievable preview or raw blob
+  for the requested operation.
+- `payload_too_large` when the daemon refuses an oversized export.
 
 Workspace policy changes use the daemon-mediated `set_workspace_policy` command,
 which records a `workspace_policy_changed` audit event and returns the updated

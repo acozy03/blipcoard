@@ -49,6 +49,9 @@ pub enum DaemonCommand {
     ListBlips,
     SearchBlips,
     GetBlip,
+    GetPayloadMetadata,
+    GetPayloadPreview,
+    ExportPayload,
     ListAuditEvents,
     RouteBlip,
     RouteLatestInboxBlip,
@@ -70,6 +73,9 @@ impl DaemonCommand {
             Self::ListBlips => "list_blips",
             Self::SearchBlips => "search_blips",
             Self::GetBlip => "get_blip",
+            Self::GetPayloadMetadata => "get_payload_metadata",
+            Self::GetPayloadPreview => "get_payload_preview",
+            Self::ExportPayload => "export_payload",
             Self::ListAuditEvents => "list_audit_events",
             Self::RouteBlip => "route_blip",
             Self::RouteLatestInboxBlip => "route_latest_inbox_blip",
@@ -112,6 +118,17 @@ pub enum DaemonRequestPayload {
     },
     GetBlip {
         blip_id: String,
+    },
+    GetPayloadMetadata {
+        payload_id: String,
+    },
+    GetPayloadPreview {
+        payload_id: String,
+        requester: PayloadRequester,
+    },
+    ExportPayload {
+        payload_id: String,
+        requester: PayloadRequester,
     },
     ListAuditEvents {
         limit: usize,
@@ -199,6 +216,8 @@ pub enum DaemonResponsePayload {
     Workspaces(WorkspaceListResponse),
     Blips(BlipListResponse),
     Blip(BlipDetail),
+    PayloadMetadata(PayloadSummary),
+    PayloadBytes(PayloadBytesResponse),
     AuditEvents(AuditEventListResponse),
     AgentBlips(AgentBlipListResponse),
     AgentBundle(AgentBundleResponse),
@@ -299,6 +318,36 @@ pub enum PayloadPreviewState {
     Unavailable,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PayloadRequester {
+    Cli,
+    Desktop,
+    Agent,
+}
+
+impl PayloadRequester {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cli => "cli",
+            Self::Desktop => "desktop",
+            Self::Agent => "agent",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PayloadBytesResponse {
+    pub payload_id: String,
+    pub blip_id: String,
+    pub workspace: String,
+    pub payload_kind: String,
+    pub mime_type: Option<String>,
+    pub platform_format: Option<String>,
+    pub byte_size: i64,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEventListResponse {
     pub events: Vec<AuditEventSummary>,
@@ -367,6 +416,9 @@ pub enum DaemonApiErrorCode {
     NotFound,
     AccessDenied,
     StoreUnavailable,
+    MissingBlob,
+    UnsupportedPayload,
+    PayloadTooLarge,
     Internal,
 }
 
@@ -553,6 +605,86 @@ mod tests {
         let decoded =
             serde_json::from_value::<DaemonRequest>(value).expect("policy request should decode");
         assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn payload_preview_request_json_shape_round_trips() {
+        let request = DaemonRequest::new(
+            "request-preview",
+            DaemonCommand::GetPayloadPreview,
+            DaemonRequestPayload::GetPayloadPreview {
+                payload_id: "blip-1:payload:image".to_owned(),
+                requester: PayloadRequester::Desktop,
+            },
+        );
+
+        let value = serde_json::to_value(&request).expect("preview request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-preview",
+                "command": "get_payload_preview",
+                "payload": {
+                    "get_payload_preview": {
+                        "payload_id": "blip-1:payload:image",
+                        "requester": "desktop",
+                    }
+                },
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<DaemonRequest>(value).expect("preview request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn payload_export_response_json_shape_round_trips() {
+        let response = DaemonResponse::ok(
+            "request-export",
+            DaemonCommand::ExportPayload,
+            DaemonResponsePayload::PayloadBytes(PayloadBytesResponse {
+                payload_id: "blip-1:payload:image".to_owned(),
+                blip_id: "blip-1".to_owned(),
+                workspace: "inbox".to_owned(),
+                payload_kind: "image".to_owned(),
+                mime_type: Some("image/png".to_owned()),
+                platform_format: Some("public.png".to_owned()),
+                byte_size: 3,
+                bytes: vec![1, 2, 3],
+            }),
+        );
+
+        let value = serde_json::to_value(&response).expect("export response should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-export",
+                "command": "export_payload",
+                "status": "ok",
+                "payload": {
+                    "payload_bytes": {
+                        "payload_id": "blip-1:payload:image",
+                        "blip_id": "blip-1",
+                        "workspace": "inbox",
+                        "payload_kind": "image",
+                        "mime_type": "image/png",
+                        "platform_format": "public.png",
+                        "byte_size": 3,
+                        "bytes": [1, 2, 3],
+                    }
+                },
+                "error": null,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<DaemonResponse>(value).expect("export response should decode");
+        assert_eq!(decoded, response);
     }
 
     #[test]

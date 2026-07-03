@@ -1,12 +1,13 @@
 pub mod daemon_client;
 mod store_backend;
 
-use blip_api::WorkspaceSummary;
+use blip_api::{PayloadRequester, PayloadSummary, WorkspaceSummary};
 use blip_config::BlipConfig;
 use blip_core::{BlipError, ContentType, NewBlip, NewWorkspace};
 use clap::{Parser, Subcommand, ValueEnum};
 use daemon_client::DaemonClient;
 use std::io;
+use std::path::{Path, PathBuf};
 use store_backend::StoreCommandBackend;
 
 const DEFAULT_LIST_LIMIT: usize = 50;
@@ -113,6 +114,10 @@ enum Commands {
         #[command(subcommand)]
         command: AgentCommands,
     },
+    Payload {
+        #[command(subcommand)]
+        command: PayloadCommands,
+    },
     AddDemo {
         workspace: String,
         content: String,
@@ -142,6 +147,31 @@ enum AgentCommands {
         workspace: String,
         #[arg(long, default_value_t = DEFAULT_LIST_LIMIT)]
         limit: usize,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PayloadCommands {
+    Inspect {
+        payload_id: String,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
+    Preview {
+        payload_id: String,
+        output_path: PathBuf,
+        #[arg(long)]
+        force: bool,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
+    Export {
+        payload_id: String,
+        output_path: PathBuf,
+        #[arg(long)]
+        force: bool,
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         output: OutputFormat,
     },
@@ -355,6 +385,36 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 print_agent_bundle_response(bundle, output)?;
             }
         },
+        Commands::Payload { command } => match command {
+            PayloadCommands::Inspect { payload_id, output } => {
+                let payload = DaemonClient::from_config(&config)?.payload_metadata(&payload_id)?;
+                print_payload_metadata(&payload, output)?;
+            }
+            PayloadCommands::Preview {
+                payload_id,
+                output_path,
+                force,
+                output,
+            } => {
+                ensure_export_path_available(&output_path, force)?;
+                let payload = DaemonClient::from_config(&config)?
+                    .payload_preview(&payload_id, PayloadRequester::Cli)?;
+                write_payload_bytes(&output_path, &payload.bytes, force)?;
+                print_payload_export_result(&payload, &output_path, output)?;
+            }
+            PayloadCommands::Export {
+                payload_id,
+                output_path,
+                force,
+                output,
+            } => {
+                ensure_export_path_available(&output_path, force)?;
+                let payload = DaemonClient::from_config(&config)?
+                    .export_payload(&payload_id, PayloadRequester::Cli)?;
+                write_payload_bytes(&output_path, &payload.bytes, force)?;
+                print_payload_export_result(&payload, &output_path, output)?;
+            }
+        },
         Commands::AddDemo {
             workspace,
             content,
@@ -430,6 +490,119 @@ fn print_workspace_policy(workspace: &WorkspaceSummary) {
         "agent raw payload access: {}",
         workspace.agent_raw_payload_access
     );
+}
+
+fn print_payload_metadata(
+    payload: &PayloadSummary,
+    output: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match output {
+        OutputFormat::Human => {
+            println!("payload: {}", payload.id);
+            println!("kind: {}", payload.payload_kind);
+            println!(
+                "mime type: {}",
+                payload.mime_type.as_deref().unwrap_or("none")
+            );
+            println!(
+                "platform format: {}",
+                payload.platform_format.as_deref().unwrap_or("none")
+            );
+            println!("byte size: {}", payload.byte_size);
+            println!(
+                "preview state: {}",
+                payload_preview_state(payload.preview_state)
+            );
+            println!("has blob: {}", payload.has_blob);
+            println!("has inline text: {}", payload.has_inline_text);
+            if let Some(preview_text) = &payload.preview_text {
+                println!("preview text: {preview_text}");
+            }
+            if let Some(preview_ref) = &payload.preview_ref {
+                println!("preview ref: {preview_ref}");
+            }
+            println!(
+                "metadata summary: {}",
+                serde_json::to_string(&payload.metadata_summary)?
+            );
+        }
+        OutputFormat::Json => {
+            serde_json::to_writer(io::stdout().lock(), payload)?;
+            println!();
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_export_path_available(
+    output_path: &Path,
+    force: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if output_path.try_exists()? && !force {
+        return Err(format!(
+            "refusing to overwrite existing file: {} (use --force to replace)",
+            output_path.display()
+        )
+        .into());
+    }
+
+    let Some(parent) = output_path.parent() else {
+        return Ok(());
+    };
+    if !parent.as_os_str().is_empty() && !parent.try_exists()? {
+        return Err(format!("parent directory does not exist: {}", parent.display()).into());
+    }
+
+    Ok(())
+}
+
+fn write_payload_bytes(
+    output_path: &Path,
+    bytes: &[u8],
+    force: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    if force {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+    std::io::Write::write_all(&mut options.open(output_path)?, bytes)?;
+    Ok(())
+}
+
+fn print_payload_export_result(
+    payload: &blip_api::PayloadBytesResponse,
+    output_path: &Path,
+    output: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match output {
+        OutputFormat::Human => {
+            println!(
+                "exported payload {} to {} ({} bytes)",
+                payload.payload_id,
+                output_path.display(),
+                payload.byte_size
+            );
+        }
+        OutputFormat::Json => {
+            let value = serde_json::json!({
+                "payload_id": payload.payload_id,
+                "blip_id": payload.blip_id,
+                "workspace": payload.workspace,
+                "payload_kind": payload.payload_kind,
+                "mime_type": payload.mime_type,
+                "path": output_path.display().to_string(),
+                "byte_size": payload.byte_size,
+            });
+            serde_json::to_writer(io::stdout().lock(), &value)?;
+            println!();
+        }
+    }
+
+    Ok(())
 }
 
 fn print_blip_list_response(
