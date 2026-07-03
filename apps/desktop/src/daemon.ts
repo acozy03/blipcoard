@@ -2,6 +2,9 @@ export type BlipSummary = {
   id: string;
   preview: string;
   size_bytes: number;
+  is_redacted?: boolean;
+  tags?: string[];
+  payloads?: PayloadSummary[];
 };
 
 export type BlipDetail = {
@@ -16,6 +19,30 @@ export type BlipDetail = {
   is_redacted: boolean;
   tags: string[];
   created_at: string;
+  payloads?: PayloadSummary[];
+};
+
+export type PayloadPreviewState =
+  | "available"
+  | "text_fallback"
+  | "metadata_only"
+  | "redacted"
+  | "missing_blob"
+  | "unsupported"
+  | "unavailable";
+
+export type PayloadSummary = {
+  id: string;
+  payload_kind: string;
+  mime_type: string | null;
+  platform_format: string | null;
+  byte_size: number;
+  preview_state: PayloadPreviewState;
+  preview_text: string | null;
+  preview_ref: string | null;
+  has_blob: boolean;
+  has_inline_text: boolean;
+  metadata_summary: unknown;
 };
 
 export type AuditEventSummary = {
@@ -100,6 +127,69 @@ const DEV_BLIPS: Record<string, BlipSummary[]> = {
       id: "dev-inbox-2",
       preview: "Stack trace from checkout smoke test",
       size_bytes: 37
+    },
+    {
+      id: "dev-inbox-3",
+      preview: "Image clipboard payload: 1280x720 image/png (245760 bytes)",
+      size_bytes: 245760,
+      tags: ["clipboard:image", "rich:clipboard"],
+      payloads: [
+        {
+          id: "dev-inbox-3:payload:image",
+          payload_kind: "image",
+          mime_type: "image/png",
+          platform_format: "public.png",
+          byte_size: 245760,
+          preview_state: "available",
+          preview_text: "image/png 1280x720 240.0 KiB",
+          preview_ref: "sha256/00/00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+          has_blob: true,
+          has_inline_text: false,
+          metadata_summary: { width: 1280, height: 720 }
+        }
+      ]
+    },
+    {
+      id: "dev-inbox-4",
+      preview: "File-list clipboard payload: 2 paths",
+      size_bytes: 196,
+      tags: ["clipboard:file-list", "rich:clipboard"],
+      payloads: [
+        {
+          id: "dev-inbox-4:payload:file-list",
+          payload_kind: "file_list",
+          mime_type: "text/uri-list",
+          platform_format: "public.file-url",
+          byte_size: 196,
+          preview_state: "metadata_only",
+          preview_text: "2 file references",
+          preview_ref: null,
+          has_blob: false,
+          has_inline_text: false,
+          metadata_summary: { path_count: 2, paths: ["/tmp/report.pdf", "/tmp/screenshot.png"] }
+        }
+      ]
+    },
+    {
+      id: "dev-inbox-5",
+      preview: "Hello from pasted HTML",
+      size_bytes: 512,
+      tags: ["clipboard:html", "rich:clipboard"],
+      payloads: [
+        {
+          id: "dev-inbox-5:payload:html",
+          payload_kind: "html",
+          mime_type: "text/html",
+          platform_format: "public.html",
+          byte_size: 512,
+          preview_state: "text_fallback",
+          preview_text: "Hello from pasted HTML",
+          preview_ref: null,
+          has_blob: true,
+          has_inline_text: true,
+          metadata_summary: { render_policy: "plain_text_only" }
+        }
+      ]
     }
   ],
   "auth-bug": [
@@ -144,6 +234,48 @@ const DEV_DETAILS: Record<string, BlipDetail> = {
     is_redacted: false,
     tags: ["demo"],
     created_at: "2026-06-26T17:31:00Z"
+  },
+  "dev-inbox-3": {
+    id: "dev-inbox-3",
+    workspace: "inbox",
+    source_app: "Screenshot Tool",
+    content_type: "plain_text",
+    language: null,
+    content: "Image clipboard payload: 1280x720 image/png (245760 bytes)",
+    size_bytes: 245760,
+    token_estimate: 7,
+    is_redacted: false,
+    tags: ["clipboard:image", "rich:clipboard"],
+    created_at: "2026-06-26T17:31:30Z",
+    payloads: DEV_BLIPS.inbox[2].payloads
+  },
+  "dev-inbox-4": {
+    id: "dev-inbox-4",
+    workspace: "inbox",
+    source_app: "Finder",
+    content_type: "plain_text",
+    language: null,
+    content: "File-list clipboard payload: 2 paths",
+    size_bytes: 196,
+    token_estimate: 5,
+    is_redacted: false,
+    tags: ["clipboard:file-list", "rich:clipboard"],
+    created_at: "2026-06-26T17:31:40Z",
+    payloads: DEV_BLIPS.inbox[3].payloads
+  },
+  "dev-inbox-5": {
+    id: "dev-inbox-5",
+    workspace: "inbox",
+    source_app: "Browser",
+    content_type: "plain_text",
+    language: null,
+    content: "Hello from pasted HTML",
+    size_bytes: 512,
+    token_estimate: 4,
+    is_redacted: false,
+    tags: ["clipboard:html", "rich:clipboard"],
+    created_at: "2026-06-26T17:31:50Z",
+    payloads: DEV_BLIPS.inbox[4].payloads
   },
   "dev-auth-1": {
     id: "dev-auth-1",

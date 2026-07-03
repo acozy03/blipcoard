@@ -1,15 +1,15 @@
 use crate::LocalBlobStore;
 use crate::domain::{
     ActorType, AuditEvent, AuditEventType, Blip, BlipMove, BlipSummary, ClipboardPayload,
-    ContentType, NewBlip, NewClipboardMetadataPayload, NewClipboardPayload, NewWorkspace,
-    PayloadKind, Workspace,
+    ClipboardPayloadSummary, ContentType, NewBlip, NewClipboardMetadataPayload,
+    NewClipboardPayload, NewWorkspace, PayloadKind, Workspace,
 };
 use crate::error::{BlipError, is_sqlite_busy_error};
 use crate::secrets::add_secret_tags;
 use crate::typing::{add_type_tag, resolved_content_type};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
@@ -19,6 +19,7 @@ const INBOX_WORKSPACE: &str = "inbox";
 const DEFAULT_LIST_LIMIT: usize = 100;
 const MAX_LIST_LIMIT: usize = 500;
 const DEFAULT_BLIP_PREVIEW_CHARS: i64 = 72;
+const DEFAULT_PAYLOAD_INLINE_PREVIEW_CHARS: i64 = 4096;
 const BUSY_RETRY_ATTEMPTS: usize = 5;
 const BUSY_RETRY_DELAY: Duration = Duration::from_millis(25);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -413,6 +414,20 @@ impl BlipStore {
         Self::get_blip_payloads_from(&self.conn, blip_id)
     }
 
+    pub fn get_blip_payload_summaries(
+        &self,
+        blip_id: &str,
+    ) -> Result<Vec<ClipboardPayloadSummary>, BlipError> {
+        Self::get_blip_payload_summaries_from(&self.conn, blip_id)
+    }
+
+    pub fn get_blip_payload_summaries_for_blips(
+        &self,
+        blip_ids: &[String],
+    ) -> Result<HashMap<String, Vec<ClipboardPayloadSummary>>, BlipError> {
+        Self::get_blip_payload_summaries_for_blips_from(&self.conn, blip_ids)
+    }
+
     pub fn insert_metadata_payload(
         &mut self,
         blip_id: &str,
@@ -540,8 +555,15 @@ impl BlipStore {
     pub fn referenced_blob_refs(&self) -> Result<HashSet<String>, BlipError> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT blob_ref
-             FROM blip_payloads
-             WHERE blob_ref IS NOT NULL
+             FROM (
+                SELECT blob_ref
+                FROM blip_payloads
+                WHERE blob_ref IS NOT NULL
+                UNION
+                SELECT preview_ref AS blob_ref
+                FROM blip_payloads
+                WHERE preview_ref IS NOT NULL
+             )
              ORDER BY blob_ref ASC",
         )?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
@@ -608,7 +630,10 @@ impl BlipStore {
     fn is_blob_ref_referenced(&self, blob_ref: &str) -> Result<bool, BlipError> {
         self.conn
             .query_row(
-                "SELECT 1 FROM blip_payloads WHERE blob_ref = ?1 LIMIT 1",
+                "SELECT 1
+                 FROM blip_payloads
+                 WHERE blob_ref = ?1 OR preview_ref = ?1
+                 LIMIT 1",
                 [blob_ref],
                 |_| Ok(()),
             )
@@ -641,8 +666,15 @@ impl BlipStore {
     ) -> Result<HashSet<String>, BlipError> {
         let mut stmt = conn.prepare(
             "SELECT DISTINCT blob_ref
-             FROM blip_payloads
-             WHERE blip_id = ?1 AND blob_ref IS NOT NULL",
+             FROM (
+                SELECT blob_ref
+                FROM blip_payloads
+                WHERE blip_id = ?1 AND blob_ref IS NOT NULL
+                UNION
+                SELECT preview_ref AS blob_ref
+                FROM blip_payloads
+                WHERE blip_id = ?1 AND preview_ref IS NOT NULL
+             )",
         )?;
         let rows = stmt.query_map([blip_id], |row| row.get::<_, String>(0))?;
         rows.collect::<Result<HashSet<_>, _>>()
@@ -685,6 +717,86 @@ impl BlipStore {
         }
 
         Ok(payloads)
+    }
+
+    fn get_blip_payload_summaries_from(
+        conn: &Connection,
+        blip_id: &str,
+    ) -> Result<Vec<ClipboardPayloadSummary>, BlipError> {
+        let mut stmt = conn.prepare(
+            "SELECT id, blip_id, payload_kind, mime_type, platform_format, byte_size,
+                    preview_ref, blob_ref, substr(inline_text, 1, ?2), inline_text IS NOT NULL,
+                    json_object(
+                        'width', json_extract(metadata_json, '$.width'),
+                        'height', json_extract(metadata_json, '$.height'),
+                        'preview', json_extract(metadata_json, '$.preview'),
+                        'policy', json_extract(metadata_json, '$.policy'),
+                        'path_count', json_extract(metadata_json, '$.path_count'),
+                        'path0', json_extract(metadata_json, '$.paths[0].display_path'),
+                        'path1', json_extract(metadata_json, '$.paths[1].display_path'),
+                        'path2', json_extract(metadata_json, '$.paths[2].display_path'),
+                        'fallback', json_extract(metadata_json, '$.fallback')
+                    )
+             FROM blip_payloads
+             WHERE blip_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )?;
+
+        let mut rows = stmt.query(params![blip_id, DEFAULT_PAYLOAD_INLINE_PREVIEW_CHARS])?;
+        let mut payloads = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            payloads.push(map_payload_summary_row(row)?);
+        }
+
+        Ok(payloads)
+    }
+
+    fn get_blip_payload_summaries_for_blips_from(
+        conn: &Connection,
+        blip_ids: &[String],
+    ) -> Result<HashMap<String, Vec<ClipboardPayloadSummary>>, BlipError> {
+        let mut payloads_by_blip_id = blip_ids
+            .iter()
+            .map(|id| (id.clone(), Vec::new()))
+            .collect::<HashMap<_, _>>();
+        if blip_ids.is_empty() {
+            return Ok(payloads_by_blip_id);
+        }
+
+        let placeholders = std::iter::repeat_n("?", blip_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id, blip_id, payload_kind, mime_type, platform_format, byte_size,
+                    preview_ref, blob_ref, substr(inline_text, 1, {DEFAULT_PAYLOAD_INLINE_PREVIEW_CHARS}), inline_text IS NOT NULL,
+                    json_object(
+                        'width', json_extract(metadata_json, '$.width'),
+                        'height', json_extract(metadata_json, '$.height'),
+                        'preview', json_extract(metadata_json, '$.preview'),
+                        'policy', json_extract(metadata_json, '$.policy'),
+                        'path_count', json_extract(metadata_json, '$.path_count'),
+                        'path0', json_extract(metadata_json, '$.paths[0].display_path'),
+                        'path1', json_extract(metadata_json, '$.paths[1].display_path'),
+                        'path2', json_extract(metadata_json, '$.paths[2].display_path'),
+                        'fallback', json_extract(metadata_json, '$.fallback')
+                    )
+             FROM blip_payloads
+             WHERE blip_id IN ({placeholders})
+             ORDER BY blip_id ASC, created_at ASC, id ASC",
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(rusqlite::params_from_iter(blip_ids.iter()))?;
+
+        while let Some(row) = rows.next()? {
+            let payload = map_payload_summary_row(row)?;
+            payloads_by_blip_id
+                .entry(payload.blip_id.clone())
+                .or_default()
+                .push(payload);
+        }
+
+        Ok(payloads_by_blip_id)
     }
 
     pub fn list_blips(&self, workspace_name: &str) -> Result<Vec<Blip>, BlipError> {
@@ -1361,6 +1473,25 @@ fn map_payload_row(row: &rusqlite::Row<'_>) -> Result<ClipboardPayload, BlipErro
     })
 }
 
+fn map_payload_summary_row(row: &rusqlite::Row<'_>) -> Result<ClipboardPayloadSummary, BlipError> {
+    let metadata_json: String = row.get(10)?;
+    let metadata_summary = serde_json::from_str(&metadata_json)?;
+
+    Ok(ClipboardPayloadSummary {
+        id: row.get(0)?,
+        blip_id: row.get(1)?,
+        kind: PayloadKind::parse(row.get::<_, String>(2)?.as_str())?,
+        mime_type: row.get(3)?,
+        platform_format: row.get(4)?,
+        byte_size: row.get(5)?,
+        preview_ref: row.get(6)?,
+        blob_ref: row.get(7)?,
+        inline_text_preview: row.get(8)?,
+        has_inline_text: row.get(9)?,
+        metadata_summary,
+    })
+}
+
 fn sqlite_limit(limit: usize) -> i64 {
     i64::try_from(limit.min(MAX_LIST_LIMIT)).unwrap_or(MAX_LIST_LIMIT as i64)
 }
@@ -1680,6 +1811,57 @@ mod tests {
     }
 
     #[test]
+    fn preview_refs_are_counted_as_referenced_blobs() {
+        let root = temp_blob_root("store-preview-refs");
+        let blob_store = LocalBlobStore::with_max_blob_bytes(&root, 1024);
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let blip = insert_test_blip(&mut store, "image placeholder");
+        let preview = blob_store
+            .write(b"preview png bytes")
+            .expect("preview blob should write");
+        let mut payload = image_payload(b"full png bytes");
+        payload.preview_ref = Some(preview.blob_ref.clone());
+
+        let inserted = store
+            .insert_blob_payload(&blip.id, &payload, &blob_store)
+            .expect("blob payload should insert");
+        let blob_ref = inserted
+            .blob_ref
+            .as_deref()
+            .expect("payload blob ref should exist")
+            .to_owned();
+
+        assert_eq!(
+            store.referenced_blob_refs().expect("refs should list"),
+            HashSet::from([blob_ref.clone(), preview.blob_ref.clone()])
+        );
+
+        let report = store
+            .garbage_collect_blobs(&blob_store)
+            .expect("gc should preserve referenced preview");
+        assert!(report.removed.is_empty());
+        assert!(
+            blob_store
+                .exists(&preview.blob_ref)
+                .expect("preview blob should stat")
+        );
+
+        assert!(
+            store
+                .delete_blip_and_collect_orphans(&blob_store, &blip.id)
+                .expect("delete should collect payload and preview")
+        );
+        assert!(!blob_store.exists(&blob_ref).expect("blob should stat"));
+        assert!(
+            !blob_store
+                .exists(&preview.blob_ref)
+                .expect("preview should stat")
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn insert_metadata_payload_records_file_list_without_blob_ref() {
         let mut store = BlipStore::in_memory().expect("store should initialize");
         let blip = insert_test_blip(&mut store, "file-list placeholder");
@@ -1717,6 +1899,85 @@ mod tests {
         assert_eq!(payloads.len(), 2);
         assert!(
             payloads
+                .iter()
+                .any(|payload| payload.kind == PayloadKind::FileList)
+        );
+    }
+
+    #[test]
+    fn payload_summary_query_bounds_inline_text_and_metadata() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let long_text = "x".repeat((DEFAULT_PAYLOAD_INLINE_PREVIEW_CHARS as usize) + 200);
+        let text_blip = insert_test_blip(&mut store, &long_text);
+        let file_blip = insert_test_blip(&mut store, "file-list placeholder");
+        store
+            .insert_metadata_payload(
+                &file_blip.id,
+                &NewClipboardMetadataPayload {
+                    kind: PayloadKind::FileList,
+                    mime_type: Some("text/uri-list".to_owned()),
+                    platform_format: Some("test:file-list".to_owned()),
+                    source_app: None,
+                    preview_ref: None,
+                    inline_text: None,
+                    metadata: serde_json::json!({
+                        "policy": "metadata_only",
+                        "path_count": 4,
+                        "paths": [
+                            { "display_path": "/tmp/a.txt", "raw_hex": "aa" },
+                            { "display_path": "/tmp/b.txt", "raw_hex": "bb" },
+                            { "display_path": "/tmp/c.txt", "raw_hex": "cc" },
+                            { "display_path": "/tmp/d.txt", "raw_hex": "dd" }
+                        ]
+                    }),
+                    byte_size: 80,
+                },
+            )
+            .expect("file-list metadata should insert");
+
+        let text_summaries = store
+            .get_blip_payload_summaries(&text_blip.id)
+            .expect("text summaries should list");
+        let text_payload = text_summaries
+            .iter()
+            .find(|payload| payload.kind == PayloadKind::Text)
+            .expect("text payload summary should exist");
+        assert_eq!(
+            text_payload
+                .inline_text_preview
+                .as_deref()
+                .expect("text preview should exist")
+                .len(),
+            DEFAULT_PAYLOAD_INLINE_PREVIEW_CHARS as usize
+        );
+
+        let file_summaries = store
+            .get_blip_payload_summaries(&file_blip.id)
+            .expect("file summaries should list");
+        let file_payload = file_summaries
+            .iter()
+            .find(|payload| payload.kind == PayloadKind::FileList)
+            .expect("file-list payload summary should exist");
+        assert_eq!(file_payload.metadata_summary["path_count"], 4);
+        assert_eq!(file_payload.metadata_summary["path0"], "/tmp/a.txt");
+        assert_eq!(file_payload.metadata_summary["path2"], "/tmp/c.txt");
+        assert!(file_payload.metadata_summary.get("paths").is_none());
+        assert!(file_payload.metadata_summary.get("raw_hex").is_none());
+
+        let batch = store
+            .get_blip_payload_summaries_for_blips(&[text_blip.id.clone(), file_blip.id.clone()])
+            .expect("batched summaries should list");
+        assert_eq!(
+            batch
+                .get(&text_blip.id)
+                .expect("text batch entry should exist")
+                .len(),
+            1
+        );
+        assert!(
+            batch
+                .get(&file_blip.id)
+                .expect("file batch entry should exist")
                 .iter()
                 .any(|payload| payload.kind == PayloadKind::FileList)
         );

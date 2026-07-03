@@ -295,9 +295,9 @@ button {
 .blip-row {
   min-height: 68px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
   padding: 12px 14px;
   border: 1px solid #d9dfd6;
   border-radius: 8px;
@@ -348,6 +348,53 @@ button {
 
 .byte-count {
   justify-self: end;
+  white-space: nowrap;
+}
+
+.preview-kind {
+  justify-self: end;
+  min-width: 72px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid #cdd6cc;
+  border-radius: 6px;
+  background: #f8faf5;
+  color: #526057;
+  font-size: 12px;
+  line-height: 1.1;
+  font-weight: 650;
+}
+
+.preview-kind > svg {
+  flex: 0 0 auto;
+}
+
+.preview-kind.image {
+  border-color: #acc7d6;
+  background: #f3f9fb;
+  color: #315b6d;
+}
+
+.preview-kind.file_list {
+  border-color: #d8c69b;
+  background: #fffaf0;
+  color: #735b24;
+}
+
+.preview-kind.rich_text {
+  border-color: #b8c6d8;
+  background: #f5f8fc;
+  color: #3f5875;
+}
+
+.preview-kind.unknown {
+  border-color: #d6b7b7;
+  background: #fff7f7;
+  color: #7c3f3f;
 }
 
 .detail-panel {
@@ -420,6 +467,88 @@ button {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.safe-preview {
+  display: grid;
+  gap: 8px;
+}
+
+.safe-preview-note {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid #b8c6d8;
+  border-radius: 6px;
+  background: #f5f8fc;
+  color: #3f5875;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 650;
+}
+
+.preview-footnote {
+  margin: 0;
+  color: #667169;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.payload-placeholder {
+  min-height: 180px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px dashed #cdd6cc;
+  border-radius: 6px;
+  background: #f8faf5;
+  color: #526057;
+}
+
+.payload-placeholder > svg {
+  color: #2f6f5e;
+}
+
+.payload-placeholder h3 {
+  margin: 0 0 6px;
+  color: #26302b;
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.payload-placeholder p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #526057;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.payload-placeholder.image {
+  border-color: #acc7d6;
+  background: #f3f9fb;
+}
+
+.payload-placeholder.file_list {
+  border-color: #d8c69b;
+  background: #fffaf0;
+}
+
+.payload-placeholder.rich_text {
+  border-color: #b8c6d8;
+  background: #f5f8fc;
+}
+
+.payload-placeholder.unknown {
+  border-color: #d6b7b7;
+  background: #fff7f7;
 }
 
 .metadata-grid {
@@ -753,6 +882,10 @@ button {
   .workspace-header,
   .blip-row {
     grid-template-columns: 1fr;
+  }
+
+  .preview-kind {
+    justify-self: start;
   }
 
   .metadata-grid {

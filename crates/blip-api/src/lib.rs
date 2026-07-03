@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub const DAEMON_API_VERSION: u16 = 1;
 
@@ -232,6 +233,8 @@ pub struct BlipSummary {
     pub is_redacted: bool,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub payloads: Vec<PayloadSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,6 +250,35 @@ pub struct BlipDetail {
     pub is_redacted: bool,
     pub tags: Vec<String>,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub payloads: Vec<PayloadSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PayloadSummary {
+    pub id: String,
+    pub payload_kind: String,
+    pub mime_type: Option<String>,
+    pub platform_format: Option<String>,
+    pub byte_size: i64,
+    pub preview_state: PayloadPreviewState,
+    pub preview_text: Option<String>,
+    pub preview_ref: Option<String>,
+    pub has_blob: bool,
+    pub has_inline_text: bool,
+    pub metadata_summary: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PayloadPreviewState {
+    Available,
+    TextFallback,
+    MetadataOnly,
+    Redacted,
+    MissingBlob,
+    Unsupported,
+    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -677,6 +709,7 @@ mod tests {
                 is_redacted: true,
                 tags: vec!["demo".to_owned()],
                 created_at: created_at.with_timezone(&Utc),
+                payloads: Vec::new(),
             }),
         );
 
@@ -702,6 +735,7 @@ mod tests {
                         "is_redacted": true,
                         "tags": ["demo"],
                         "created_at": "2026-06-26T17:30:00Z",
+                        "payloads": [],
                     }
                 },
                 "error": null,
@@ -726,6 +760,7 @@ mod tests {
                     size_bytes: 28,
                     is_redacted: false,
                     tags: vec!["secret".to_owned(), "secret:assignment".to_owned()],
+                    payloads: Vec::new(),
                 }],
             }),
         );
@@ -748,6 +783,7 @@ mod tests {
                             "size_bytes": 28,
                             "is_redacted": false,
                             "tags": ["secret", "secret:assignment"],
+                            "payloads": [],
                         }],
                     }
                 },
@@ -793,6 +829,7 @@ mod tests {
                     size_bytes: 11,
                     is_redacted: false,
                     tags: Vec::new(),
+                    payloads: Vec::new(),
                 }],
             }))
         );

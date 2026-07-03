@@ -433,6 +433,91 @@ fn cli_surfaces_secret_detection_in_list_output() {
 }
 
 #[test]
+fn cli_summarizes_rich_payloads_without_binary_output() {
+    let temp = tempdir().expect("tempdir should exist");
+    let db_path = temp.path().join("blipcoard-test.db");
+    let socket_path = temp.path().join("blipcoard.sock");
+
+    blip_command(&db_path)
+        .args(["add-demo", "inbox", "File-list clipboard payload: 2 paths"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("created blip"));
+
+    let connection = Connection::open(&db_path).expect("database should open");
+    let blip_id = connection
+        .query_row(
+            "SELECT id FROM blips WHERE content = ?1",
+            ["File-list clipboard payload: 2 paths"],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("seed blip should exist");
+    connection
+        .execute(
+            "INSERT INTO blip_payloads (
+                id, blip_id, payload_kind, mime_type, platform_format, byte_size,
+                source_app, captured_at, preview_ref, blob_ref, inline_text,
+                metadata_json, created_at
+             ) VALUES (?1, ?2, 'file_list', 'text/uri-list', 'test:file-list', 42,
+                NULL, ?3, NULL, NULL, NULL, ?4, ?3)",
+            rusqlite::params![
+                format!("{blip_id}:payload:file-list"),
+                blip_id,
+                "2026-07-03T12:00:00Z",
+                serde_json::json!({
+                    "policy": "metadata_only",
+                    "path_count": 2,
+                    "paths": [
+                        { "display_path": "/tmp/a.txt" },
+                        { "display_path": "/tmp/b.txt" }
+                    ]
+                })
+                .to_string(),
+            ],
+        )
+        .expect("file-list payload should insert");
+
+    let mut daemon = blip_daemon_command(&db_path, &socket_path)
+        .spawn()
+        .expect("daemon should start");
+    wait_for_socket(&socket_path);
+
+    blip_command_with_socket(&db_path, &socket_path)
+        .args(["inbox"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "[payload:file_list,metadata_only,id=",
+        ))
+        .stdout(predicate::str::contains("mime=text/uri-list"))
+        .stdout(predicate::str::contains("size=42B"))
+        .stdout(predicate::str::contains(
+            "File-list clipboard payload: 2 paths",
+        ));
+
+    let inbox = assert_json_success(
+        blip_command_with_socket(&db_path, &socket_path),
+        &["inbox", "--output", "json"],
+    );
+    let payload = inbox["blips"]
+        .as_array()
+        .expect("inbox blips should be an array")
+        .iter()
+        .find(|blip| blip["id"] == blip_id)
+        .and_then(|blip| blip["payloads"].as_array())
+        .and_then(|payloads| {
+            payloads
+                .iter()
+                .find(|payload| payload["payload_kind"] == "file_list")
+        })
+        .expect("file-list payload summary should be present");
+    assert_eq!(payload["preview_state"], "metadata_only");
+    assert!(payload.get("blob_ref").is_none());
+
+    stop_daemon(&mut daemon);
+}
+
+#[test]
 fn health_reports_when_daemon_socket_is_unavailable() {
     let temp = tempdir().expect("tempdir should exist");
     let db_path = temp.path().join("blipcoard-test.db");

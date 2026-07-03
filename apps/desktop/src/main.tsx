@@ -4,6 +4,10 @@ import { createRoot } from "react-dom/client";
 import {
   AlertTriangle,
   CheckCircle2,
+  Code2,
+  FileQuestion,
+  FileText,
+  Image,
   Inbox,
   Keyboard,
   Loader2,
@@ -25,10 +29,13 @@ import {
   type AuditEventSummary,
   type BlipDetail,
   type BlipSummary,
+  type PayloadSummary,
   type ShortcutRegistration,
   type WorkspaceSummary
 } from "./daemon";
 import "./styles.css";
+
+const DETAIL_TEXT_LIMIT = 12000;
 
 type WorkspaceState =
   | { status: "loading" }
@@ -660,6 +667,7 @@ function BlipList({
             <h2>{blip.preview || "Untitled blip"}</h2>
             <p>{blip.id}</p>
           </div>
+          <PreviewKindBadge kind={classifyPayload(blip)} />
           <span className="byte-count">{formatBytes(blip.size_bytes)}</span>
         </button>
       ))}
@@ -700,7 +708,7 @@ function BlipDetailPanel({
         </span>
       </header>
 
-      <pre className="detail-content">{blip.content}</pre>
+      <SafePayloadPreview blip={blip} />
 
       <dl className="metadata-grid">
         <div>
@@ -742,6 +750,244 @@ function BlipDetailPanel({
       </dl>
     </article>
   );
+}
+
+type PayloadKind = "text" | "image" | "file_list" | "rich_text" | "unknown";
+
+type PayloadLike = {
+  content_type?: string;
+  content?: string;
+  is_redacted?: boolean;
+  tags?: string[];
+  payloads?: PayloadSummary[];
+};
+
+function SafePayloadPreview({ blip }: { blip: BlipDetail }) {
+  const payload = primaryPayloadSummary(blip);
+  const kind = classifyPayload(blip);
+  const previewText = payload?.preview_text ?? blip.content;
+  const { text: safeContent, truncated: contentWasTruncated } = boundedText(previewText);
+
+  if (blip.is_redacted) {
+    return (
+      <PayloadPlaceholder
+        detail="The detail payload is redacted. Content is intentionally unavailable in this view."
+        kind={kind}
+        title="Redacted payload"
+      />
+    );
+  }
+
+  if (payload?.preview_state === "missing_blob") {
+    return (
+      <PayloadPlaceholder
+        detail={safeContent || "The payload metadata is available, but the backing blob is missing."}
+        kind={kind}
+        title="Missing payload blob"
+      />
+    );
+  }
+
+  if (payload?.preview_state === "unavailable") {
+    return (
+      <PayloadPlaceholder
+        detail={safeContent || "A safe preview could not be generated for this payload."}
+        kind={kind}
+        title="Preview unavailable"
+      />
+    );
+  }
+
+  if (kind === "image") {
+    return (
+      <PayloadPlaceholder
+        detail={safeContent || "Image metadata is unavailable."}
+        kind={kind}
+        title="Image preview withheld"
+      />
+    );
+  }
+
+  if (kind === "file_list") {
+    return (
+      <PayloadPlaceholder
+        detail={safeContent || "File-list metadata is unavailable."}
+        kind={kind}
+        title="File list captured"
+      />
+    );
+  }
+
+  if (kind === "unknown") {
+    return (
+      <PayloadPlaceholder
+        detail={safeContent || "No readable metadata was provided for this payload."}
+        kind={kind}
+        title="Unknown payload"
+      />
+    );
+  }
+
+  if (!safeContent) {
+    return (
+      <PayloadPlaceholder
+        detail="No displayable text was provided for this payload."
+        kind={kind}
+        title="Missing preview text"
+      />
+    );
+  }
+
+  return (
+    <div className="safe-preview">
+      {kind === "rich_text" || payload?.preview_state === "text_fallback" ? (
+        <div className="safe-preview-note">
+          <Code2 aria-hidden="true" size={16} />
+          <span>Rich payload shown as escaped plain text</span>
+        </div>
+      ) : null}
+      <pre className="detail-content">{safeContent}</pre>
+      {contentWasTruncated ? (
+        <p className="preview-footnote">Preview truncated at {DETAIL_TEXT_LIMIT} characters.</p>
+      ) : null}
+    </div>
+  );
+}
+
+function PayloadPlaceholder({
+  detail,
+  kind,
+  title
+}: {
+  detail: string;
+  kind: PayloadKind;
+  title: string;
+}) {
+  const Icon = payloadIcon(kind);
+
+  return (
+    <div className={`payload-placeholder ${kind}`}>
+      <Icon aria-hidden="true" size={24} />
+      <div>
+        <h3>{title}</h3>
+        <p>{detail}</p>
+      </div>
+    </div>
+  );
+}
+
+function PreviewKindBadge({ kind }: { kind: PayloadKind }) {
+  const Icon = payloadIcon(kind);
+
+  return (
+    <span className={`preview-kind ${kind}`} title={payloadKindLabel(kind)}>
+      <Icon aria-hidden="true" size={14} />
+      <span>{payloadKindLabel(kind)}</span>
+    </span>
+  );
+}
+
+function classifyPayload(payload: PayloadLike): PayloadKind {
+  const primaryPayload = primaryPayloadSummary(payload);
+  if (primaryPayload) {
+    return normalizePayloadKind(primaryPayload.payload_kind);
+  }
+
+  const tags = payload.tags ?? [];
+  const normalizedTags = tags.map((tag) => tag.toLowerCase());
+  const contentType = payload.content_type?.toLowerCase() ?? "";
+  const content = payload.content?.toLowerCase() ?? "";
+
+  if (hasTag(normalizedTags, "clipboard:image") || content.startsWith("image clipboard payload")) {
+    return "image";
+  }
+
+  if (
+    hasTag(normalizedTags, "clipboard:file-list") ||
+    hasTag(normalizedTags, "clipboard:file") ||
+    content.startsWith("file-list clipboard payload")
+  ) {
+    return "file_list";
+  }
+
+  if (
+    hasTag(normalizedTags, "clipboard:html") ||
+    hasTag(normalizedTags, "clipboard:rtf") ||
+    contentType === "html" ||
+    contentType === "rtf" ||
+    contentType === "text/html" ||
+    contentType === "text/rtf"
+  ) {
+    return "rich_text";
+  }
+
+  if (hasTag(normalizedTags, "clipboard:unknown") || content.startsWith("unknown clipboard payload")) {
+    return "unknown";
+  }
+
+  return "text";
+}
+
+function primaryPayloadSummary(payload: PayloadLike): PayloadSummary | undefined {
+  return payload.payloads?.find((candidate) => candidate.payload_kind !== "text") ?? payload.payloads?.[0];
+}
+
+function normalizePayloadKind(payloadKind: string): PayloadKind {
+  switch (payloadKind) {
+    case "image":
+      return "image";
+    case "file_list":
+      return "file_list";
+    case "html":
+    case "rtf":
+      return "rich_text";
+    case "unknown":
+      return "unknown";
+    default:
+      return "text";
+  }
+}
+
+function hasTag(tags: string[], expected: string) {
+  return tags.some((tag) => tag === expected);
+}
+
+function payloadIcon(kind: PayloadKind) {
+  switch (kind) {
+    case "image":
+      return Image;
+    case "file_list":
+      return FileText;
+    case "rich_text":
+      return Code2;
+    case "unknown":
+      return FileQuestion;
+    default:
+      return FileText;
+  }
+}
+
+function payloadKindLabel(kind: PayloadKind) {
+  switch (kind) {
+    case "image":
+      return "Image";
+    case "file_list":
+      return "Files";
+    case "rich_text":
+      return "Rich";
+    case "unknown":
+      return "Unknown";
+    default:
+      return "Text";
+  }
+}
+
+function boundedText(value: string) {
+  const trimmed = value.trim();
+  return {
+    text: trimmed.slice(0, DETAIL_TEXT_LIMIT),
+    truncated: trimmed.length > DETAIL_TEXT_LIMIT
+  };
 }
 
 function workspaceStatusLabel(state: WorkspaceState, selectedWorkspace: string | null) {
