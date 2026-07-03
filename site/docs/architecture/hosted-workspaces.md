@@ -227,8 +227,8 @@ Phase 11 MVP does not include:
 
 The next Phase 11 issues should decide:
 
-- whether MVP content is server-readable with strong transport/storage controls
-  or end-to-end encrypted
+- the required security controls from the
+  [Hosted workspace threat model](./hosted-threat-model.md)
 - hosted data model and event ordering
 - join code entropy, expiry, revocation, and rate limits
 - hosted blob size limits and retention

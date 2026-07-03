@@ -28,6 +28,7 @@ Core product surfaces:
 - [Runtime model](../architecture/runtime-model.md)
 - [Privacy and workspace policy](../architecture/privacy-and-policy.md)
 - [Hosted workspace architecture](../architecture/hosted-workspaces.md)
+- [Hosted workspace threat model](../architecture/hosted-threat-model.md)
 - [Storage and rich payload reliability](../architecture/storage-and-blobs.md)
 - [Daemon API reference](../reference/daemon-api.md)
 

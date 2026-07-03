@@ -71,5 +71,6 @@ The local store is part of the privacy boundary.
 - Retention and deletion must account for both metadata and blobs.
 - The daemon should avoid remote calls for classification or preview generation.
 
-Hosted multiplayer workspaces will require a separate threat model. The local
-runtime should remain useful without hosted infrastructure.
+Hosted multiplayer workspaces use a separate
+[hosted threat model](./hosted-threat-model.md). The local runtime should remain
+useful without hosted infrastructure.
