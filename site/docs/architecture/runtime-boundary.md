@@ -83,9 +83,9 @@ boundary:
 - Unix domain socket on macOS and Linux
 - named pipe on Windows
 
-The API is local-only by default. Hosted or shared workspaces are future
-features and should add a separate sync boundary instead of weakening the local
-daemon boundary.
+The API is local-only by default. Hosted or shared workspaces add a separate
+sync boundary instead of weakening the local daemon boundary. See
+[Hosted workspace architecture](./hosted-workspaces.md).
 
 ## Ingestion Flow
 

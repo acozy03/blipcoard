@@ -109,6 +109,7 @@ const config = {
             title: 'Reference',
             items: [
               {label: 'Runtime boundary', to: '/docs/architecture/runtime-boundary'},
+              {label: 'Hosted workspaces', to: '/docs/architecture/hosted-workspaces'},
               {label: 'Architecture', to: '/docs/architecture/runtime-model'},
               {label: 'CLI reference', to: '/docs/reference/cli'},
               {label: 'Daemon API', to: '/docs/reference/daemon-api'},

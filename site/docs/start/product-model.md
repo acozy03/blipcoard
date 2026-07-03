@@ -83,3 +83,8 @@ This keeps ordinary clipboard usage fast while making agent context deliberate.
 `blipcoard` is not a cloud clipboard by default, a password manager, or a
 replacement for the operating system clipboard. It is a local coordination layer
 between the clipboard, user-controlled workspaces, and agent-safe retrieval.
+
+Hosted or shared workspaces are opt-in collaboration features. They publish
+selected blips or visibly enabled share-mode captures, not every local clipboard
+event by default. See
+[Hosted workspace architecture](../architecture/hosted-workspaces.md).
