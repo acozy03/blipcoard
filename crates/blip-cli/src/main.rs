@@ -1,6 +1,7 @@
 pub mod daemon_client;
 mod store_backend;
 
+use blip_api::WorkspaceSummary;
 use blip_config::BlipConfig;
 use blip_core::{BlipError, ContentType, NewBlip, NewWorkspace};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -24,6 +25,23 @@ enum OutputFormat {
     Json,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum RichPayloadVisibilityArg {
+    Hidden,
+    Metadata,
+    SafePreview,
+}
+
+impl RichPayloadVisibilityArg {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Hidden => "hidden",
+            Self::Metadata => "metadata",
+            Self::SafePreview => "safe_preview",
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum Commands {
     Health {
@@ -35,6 +53,19 @@ enum Commands {
         output: OutputFormat,
     },
     Workspaces {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
+    Policy {
+        workspace: String,
+        #[arg(long)]
+        rich_capture: Option<bool>,
+        #[arg(long)]
+        image_capture: Option<bool>,
+        #[arg(long, value_enum)]
+        rich_visibility: Option<RichPayloadVisibilityArg>,
+        #[arg(long)]
+        agent_raw_payload_access: Option<bool>,
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         output: OutputFormat,
     },
@@ -177,6 +208,38 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 OutputFormat::Json => {
                     serde_json::to_writer(io::stdout().lock(), &workspaces)?;
+                    println!();
+                }
+            }
+        }
+        Commands::Policy {
+            workspace,
+            rich_capture,
+            image_capture,
+            rich_visibility,
+            agent_raw_payload_access,
+            output,
+        } => {
+            let client = DaemonClient::from_config(&config)?;
+            let workspaces = client.workspaces()?;
+            let current = workspaces
+                .workspaces
+                .into_iter()
+                .find(|candidate| candidate.name == workspace)
+                .ok_or_else(|| format!("workspace `{workspace}` does not exist"))?;
+            let updated = client.set_workspace_policy(
+                &workspace,
+                rich_capture.unwrap_or(current.rich_capture_enabled),
+                image_capture.unwrap_or(current.image_capture_enabled),
+                rich_visibility
+                    .map(RichPayloadVisibilityArg::as_str)
+                    .unwrap_or(current.rich_payload_visibility.as_str()),
+                agent_raw_payload_access.unwrap_or(current.agent_raw_payload_access),
+            )?;
+            match output {
+                OutputFormat::Human => print_workspace_policy(&updated),
+                OutputFormat::Json => {
+                    serde_json::to_writer(io::stdout().lock(), &updated)?;
                     println!();
                 }
             }
@@ -353,6 +416,20 @@ fn print_agent_bundle_response(
     }
 
     Ok(())
+}
+
+fn print_workspace_policy(workspace: &WorkspaceSummary) {
+    println!("workspace: {}", workspace.name);
+    println!("rich capture: {}", workspace.rich_capture_enabled);
+    println!("image capture: {}", workspace.image_capture_enabled);
+    println!(
+        "rich payload visibility: {}",
+        workspace.rich_payload_visibility
+    );
+    println!(
+        "agent raw payload access: {}",
+        workspace.agent_raw_payload_access
+    );
 }
 
 fn print_blip_list_response(

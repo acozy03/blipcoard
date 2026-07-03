@@ -50,6 +50,9 @@ pub enum BlipError {
     #[error("agent access to workspace `{0}` is denied")]
     AgentAccessDenied(String),
 
+    #[error("agent raw payload access to workspace `{0}` is denied")]
+    AgentRawPayloadAccessDenied(String),
+
     #[error("active workspace is not set")]
     ActiveWorkspaceNotSet,
 }

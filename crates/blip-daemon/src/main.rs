@@ -17,13 +17,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     start_ipc_server(&config)?;
 
     let store = BlipStore::open(&config.database_path)?;
-    let clipboard_config = ClipboardWatcherConfig::default();
+    let clipboard_config = clipboard_config_from_capture(&config.capture);
     let idle_interval = clipboard_config.poll_interval;
     let watcher = system_watcher(clipboard_config)?;
-    let mut runtime = DaemonRuntime::new(
+    let mut runtime = DaemonRuntime::with_capture_config(
         &config.database_path,
         store,
         ClipboardIngestionSource::new(watcher, idle_interval),
+        config.capture.clone(),
     );
     let response = runtime.health_response()?;
 
@@ -35,9 +36,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn start_ipc_server(config: &BlipConfig) -> Result<(), Box<dyn std::error::Error>> {
     let database_path = config.database_path.clone();
+    let capture = config.capture.clone();
     let socket_path = config.daemon_socket_path()?;
     let store = BlipStore::open(&database_path)?;
-    let mut runtime = DaemonRuntime::new(&database_path, store, PendingIngestionSource::default());
+    let mut runtime = DaemonRuntime::with_capture_config(
+        &database_path,
+        store,
+        PendingIngestionSource::default(),
+        capture,
+    );
     let ipc_server = DaemonIpcServer::new(&socket_path).bind()?;
 
     thread::spawn(move || {
@@ -52,14 +59,28 @@ fn start_ipc_server(config: &BlipConfig) -> Result<(), Box<dyn std::error::Error
 fn serve_ipc(config: &BlipConfig) -> Result<(), Box<dyn std::error::Error>> {
     let socket_path = config.daemon_socket_path()?;
     let store = BlipStore::open(&config.database_path)?;
-    let mut runtime = DaemonRuntime::new(
+    let mut runtime = DaemonRuntime::with_capture_config(
         &config.database_path,
         store,
         PendingIngestionSource::default(),
+        config.capture.clone(),
     );
 
     eprintln!("serving daemon IPC on {}", socket_path.display());
     DaemonIpcServer::new(socket_path).serve(|request| runtime.dispatch_daemon_request(request))?;
 
     Ok(())
+}
+
+fn clipboard_config_from_capture(capture: &blip_config::CaptureConfig) -> ClipboardWatcherConfig {
+    ClipboardWatcherConfig {
+        poll_interval: ClipboardWatcherConfig::default().poll_interval,
+        max_image_bytes: capture.max_image_bytes,
+        capture_text: capture.text_enabled(),
+        capture_image: capture.image_enabled(),
+        capture_file_list: capture.file_list_enabled(),
+        capture_html: capture.html_enabled(),
+        capture_rtf: capture.rtf_enabled(),
+        capture_unknown: capture.unknown_enabled(),
+    }
 }

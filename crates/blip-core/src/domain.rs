@@ -225,6 +225,67 @@ pub struct NewWorkspace {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RichPayloadVisibility {
+    Hidden,
+    Metadata,
+    SafePreview,
+}
+
+impl RichPayloadVisibility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hidden => "hidden",
+            Self::Metadata => "metadata",
+            Self::SafePreview => "safe_preview",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, BlipError> {
+        match value {
+            "hidden" => Ok(Self::Hidden),
+            "metadata" => Ok(Self::Metadata),
+            "safe_preview" => Ok(Self::SafePreview),
+            _ => Err(BlipError::InvalidPersistedValue {
+                field: "rich_payload_visibility",
+                value: value.to_owned(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspacePolicy {
+    pub workspace_name: String,
+    pub rich_capture_enabled: bool,
+    pub image_capture_enabled: bool,
+    pub rich_payload_visibility: RichPayloadVisibility,
+    pub agent_raw_payload_access: bool,
+}
+
+impl WorkspacePolicy {
+    pub fn default_for_workspace(workspace_name: impl Into<String>) -> Self {
+        Self {
+            workspace_name: workspace_name.into(),
+            rich_capture_enabled: true,
+            image_capture_enabled: true,
+            rich_payload_visibility: RichPayloadVisibility::SafePreview,
+            agent_raw_payload_access: false,
+        }
+    }
+
+    pub fn allows_capture(&self, kind: PayloadKind) -> bool {
+        match kind {
+            PayloadKind::Text => true,
+            PayloadKind::Image => self.rich_capture_enabled && self.image_capture_enabled,
+            PayloadKind::FileList | PayloadKind::Html | PayloadKind::Rtf | PayloadKind::Unknown => {
+                self.rich_capture_enabled
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActorType {
     System,
     User,
@@ -259,9 +320,15 @@ pub enum AuditEventType {
     WorkspaceCreated,
     WorkspaceActivated,
     StickyCaptureChanged,
+    WorkspacePolicyChanged,
     BlipIngested,
     BlipMoved,
     BlipsRead,
+    RichPayloadCaptureSkipped,
+    PayloadPreviewRead,
+    PayloadRawExported,
+    DesktopPayloadOpened,
+    AgentPayloadRead,
 }
 
 impl AuditEventType {
@@ -271,9 +338,15 @@ impl AuditEventType {
             Self::WorkspaceCreated => "workspace_created",
             Self::WorkspaceActivated => "workspace_activated",
             Self::StickyCaptureChanged => "sticky_capture_changed",
+            Self::WorkspacePolicyChanged => "workspace_policy_changed",
             Self::BlipIngested => "blip_ingested",
             Self::BlipMoved => "blip_moved",
             Self::BlipsRead => "blips_read",
+            Self::RichPayloadCaptureSkipped => "rich_payload_capture_skipped",
+            Self::PayloadPreviewRead => "payload_preview_read",
+            Self::PayloadRawExported => "payload_raw_exported",
+            Self::DesktopPayloadOpened => "desktop_payload_opened",
+            Self::AgentPayloadRead => "agent_payload_read",
         }
     }
 
@@ -283,9 +356,15 @@ impl AuditEventType {
             "workspace_created" => Ok(Self::WorkspaceCreated),
             "workspace_activated" => Ok(Self::WorkspaceActivated),
             "sticky_capture_changed" => Ok(Self::StickyCaptureChanged),
+            "workspace_policy_changed" => Ok(Self::WorkspacePolicyChanged),
             "blip_ingested" => Ok(Self::BlipIngested),
             "blip_moved" => Ok(Self::BlipMoved),
             "blips_read" => Ok(Self::BlipsRead),
+            "rich_payload_capture_skipped" => Ok(Self::RichPayloadCaptureSkipped),
+            "payload_preview_read" => Ok(Self::PayloadPreviewRead),
+            "payload_raw_exported" => Ok(Self::PayloadRawExported),
+            "desktop_payload_opened" => Ok(Self::DesktopPayloadOpened),
+            "agent_payload_read" => Ok(Self::AgentPayloadRead),
             _ => Err(BlipError::InvalidPersistedValue {
                 field: "event_type",
                 value: value.to_owned(),
@@ -304,4 +383,17 @@ pub struct AuditEvent {
     pub target_workspace: Option<String>,
     pub details_json: Option<String>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PayloadAccessAudit {
+    pub actor_type: ActorType,
+    pub actor_id: Option<String>,
+    pub event_type: AuditEventType,
+    pub target_blip_id: Option<String>,
+    pub target_workspace: Option<String>,
+    pub payload_id: String,
+    pub payload_kind: PayloadKind,
+    pub access_mode: String,
+    pub decision: String,
 }
