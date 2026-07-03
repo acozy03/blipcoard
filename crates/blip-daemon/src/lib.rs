@@ -18,10 +18,11 @@ use blip_clipboard::{
     ClipboardError, ClipboardFileList, ClipboardImage, ClipboardPayload, ClipboardRichText,
     ClipboardUnknown, ClipboardWatcher,
 };
+use blip_config::CaptureConfig;
 use blip_core::{AuditEvent, Blip};
 use blip_core::{
     BlipError, BlipStore, ContentType, LocalBlobStore, NewBlip, NewClipboardMetadataPayload,
-    NewClipboardPayload, PayloadKind,
+    NewClipboardPayload, PayloadKind, RichPayloadVisibility, WorkspacePolicy,
 };
 use chrono::Utc;
 use image::GenericImageView;
@@ -43,6 +44,7 @@ pub struct DaemonRuntime<S> {
     store: BlipStore,
     source: S,
     duplicate_suppression: DuplicateSuppression,
+    capture: CaptureConfig,
 }
 
 impl<S> DaemonRuntime<S>
@@ -55,6 +57,7 @@ where
             store,
             source,
             duplicate_suppression: DuplicateSuppression::new(DUPLICATE_SUPPRESSION_WINDOW),
+            capture: CaptureConfig::default(),
         }
     }
 
@@ -69,6 +72,22 @@ where
             store,
             source,
             duplicate_suppression: DuplicateSuppression::new(duplicate_suppression_window),
+            capture: CaptureConfig::default(),
+        }
+    }
+
+    pub fn with_capture_config(
+        database_path: impl AsRef<Path>,
+        store: BlipStore,
+        source: S,
+        capture: CaptureConfig,
+    ) -> Self {
+        Self {
+            database_path: database_path.as_ref().to_owned(),
+            store,
+            source,
+            duplicate_suppression: DuplicateSuppression::new(DUPLICATE_SUPPRESSION_WINDOW),
+            capture,
         }
     }
 
@@ -168,11 +187,21 @@ where
                 DaemonCommand::SetStickyCapture,
                 DaemonRequestPayload::SetStickyCapture { workspace, enabled },
             ) => match self.store.set_sticky_capture(&workspace, enabled) {
-                Ok(workspace) => DaemonResponse::ok(
-                    request_id,
-                    command,
-                    DaemonResponsePayload::StickyCaptureSet(workspace_summary(workspace)),
-                ),
+                Ok(workspace) => match self.workspace_summary(workspace) {
+                    Ok(summary) => DaemonResponse::ok(
+                        request_id,
+                        command,
+                        DaemonResponsePayload::StickyCaptureSet(summary),
+                    ),
+                    Err(error) => DaemonResponse::error(
+                        request_id,
+                        command,
+                        DaemonApiError::new(
+                            DaemonApiErrorCode::StoreUnavailable,
+                            error.to_string(),
+                        ),
+                    ),
+                },
                 Err(BlipError::WorkspaceNotFound(workspace)) => DaemonResponse::error(
                     request_id,
                     command,
@@ -187,15 +216,109 @@ where
                     DaemonApiError::new(DaemonApiErrorCode::StoreUnavailable, error.to_string()),
                 ),
             },
-            (DaemonCommand::ListWorkspaces, DaemonRequestPayload::ListWorkspaces) => {
-                match self.store.list_workspaces() {
-                    Ok(workspaces) => DaemonResponse::ok(
+            (
+                DaemonCommand::SetWorkspacePolicy,
+                DaemonRequestPayload::SetWorkspacePolicy {
+                    workspace,
+                    rich_capture_enabled,
+                    image_capture_enabled,
+                    rich_payload_visibility,
+                    agent_raw_payload_access,
+                },
+            ) => {
+                let visibility = match RichPayloadVisibility::parse(&rich_payload_visibility) {
+                    Ok(visibility) => visibility,
+                    Err(error) => {
+                        return DaemonResponse::error(
+                            request_id,
+                            command,
+                            DaemonApiError::new(
+                                DaemonApiErrorCode::InvalidRequest,
+                                error.to_string(),
+                            ),
+                        );
+                    }
+                };
+                let policy = WorkspacePolicy {
+                    workspace_name: workspace.clone(),
+                    rich_capture_enabled,
+                    image_capture_enabled,
+                    rich_payload_visibility: visibility,
+                    agent_raw_payload_access,
+                };
+                match self.store.set_workspace_policy(&policy) {
+                    Ok(_) => match self.store.get_workspace(&workspace) {
+                        Ok(Some(workspace)) => match self.workspace_summary(workspace) {
+                            Ok(summary) => DaemonResponse::ok(
+                                request_id,
+                                command,
+                                DaemonResponsePayload::WorkspacePolicySet(summary),
+                            ),
+                            Err(error) => DaemonResponse::error(
+                                request_id,
+                                command,
+                                DaemonApiError::new(
+                                    DaemonApiErrorCode::StoreUnavailable,
+                                    error.to_string(),
+                                ),
+                            ),
+                        },
+                        Ok(None) => DaemonResponse::error(
+                            request_id,
+                            command,
+                            DaemonApiError::new(
+                                DaemonApiErrorCode::NotFound,
+                                format!("workspace `{workspace}` does not exist"),
+                            ),
+                        ),
+                        Err(error) => DaemonResponse::error(
+                            request_id,
+                            command,
+                            DaemonApiError::new(
+                                DaemonApiErrorCode::StoreUnavailable,
+                                error.to_string(),
+                            ),
+                        ),
+                    },
+                    Err(BlipError::WorkspaceNotFound(workspace)) => DaemonResponse::error(
                         request_id,
                         command,
-                        DaemonResponsePayload::Workspaces(WorkspaceListResponse {
-                            workspaces: workspaces.into_iter().map(workspace_summary).collect(),
-                        }),
+                        DaemonApiError::new(
+                            DaemonApiErrorCode::NotFound,
+                            format!("workspace `{workspace}` does not exist"),
+                        ),
                     ),
+                    Err(error) => DaemonResponse::error(
+                        request_id,
+                        command,
+                        DaemonApiError::new(
+                            DaemonApiErrorCode::StoreUnavailable,
+                            error.to_string(),
+                        ),
+                    ),
+                }
+            }
+            (DaemonCommand::ListWorkspaces, DaemonRequestPayload::ListWorkspaces) => {
+                match self.store.list_workspaces() {
+                    Ok(workspaces) => match workspaces
+                        .into_iter()
+                        .map(|workspace| self.workspace_summary(workspace))
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        Ok(workspaces) => DaemonResponse::ok(
+                            request_id,
+                            command,
+                            DaemonResponsePayload::Workspaces(WorkspaceListResponse { workspaces }),
+                        ),
+                        Err(error) => DaemonResponse::error(
+                            request_id,
+                            command,
+                            DaemonApiError::new(
+                                DaemonApiErrorCode::StoreUnavailable,
+                                error.to_string(),
+                            ),
+                        ),
+                    },
                     Err(error) => DaemonResponse::error(
                         request_id,
                         command,
@@ -448,6 +571,10 @@ where
     }
 
     fn ingest_clipboard_text(&mut self, text: String) -> Result<(), DaemonError> {
+        if !self.capture.text_enabled() {
+            return Ok(());
+        }
+
         let observed_at = Instant::now();
         if self
             .duplicate_suppression
@@ -457,10 +584,7 @@ where
         }
 
         self.store.insert_blip(&NewBlip {
-            workspace_name: self
-                .store
-                .get_sticky_workspace()?
-                .unwrap_or_else(|| INBOX_WORKSPACE.to_owned()),
+            workspace_name: self.destination_workspace_name()?,
             source_app: None,
             content_type: ContentType::PlainText,
             language: None,
@@ -476,16 +600,16 @@ where
     }
 
     fn ingest_clipboard_image(&mut self, image: ClipboardImage) -> Result<(), DaemonError> {
-        let workspace_name = self
-            .store
-            .get_sticky_workspace()?
-            .unwrap_or_else(|| INBOX_WORKSPACE.to_owned());
+        let Some(workspace_policy) = self.destination_workspace_policy(PayloadKind::Image)? else {
+            return Ok(());
+        };
+        let workspace_name = workspace_policy.workspace_name;
         let content = format!(
             "Image clipboard payload: {}x{} {} ({} bytes)",
             image.width, image.height, image.mime_type, image.byte_size
         );
         let blip = self.store.insert_blip(&NewBlip {
-            workspace_name,
+            workspace_name: workspace_name.clone(),
             source_app: None,
             content_type: ContentType::PlainText,
             language: None,
@@ -496,7 +620,11 @@ where
         })?;
 
         let blob_store = LocalBlobStore::new(self.blob_data_dir());
-        let image_preview = create_image_preview_blob(&blob_store, &image.bytes)?;
+        let image_preview = if self.capture.image_previews {
+            create_image_preview_blob(&blob_store, &image.bytes)?
+        } else {
+            None
+        };
         self.store.insert_blob_payload(
             &blip.id,
             &NewClipboardPayload {
@@ -511,6 +639,8 @@ where
                 metadata: serde_json::json!({
                     "width": image.width,
                     "height": image.height,
+                    "capture_policy": payload_policy_metadata(PayloadKind::Image, &workspace_name),
+                    "redaction": redaction_hook_metadata(),
                     "preview": image_preview.as_ref().map(|preview| {
                         serde_json::json!({
                             "mime_type": "image/png",
@@ -533,17 +663,18 @@ where
         &mut self,
         file_list: ClipboardFileList,
     ) -> Result<(), DaemonError> {
-        let workspace_name = self
-            .store
-            .get_sticky_workspace()?
-            .unwrap_or_else(|| INBOX_WORKSPACE.to_owned());
+        let Some(workspace_policy) = self.destination_workspace_policy(PayloadKind::FileList)?
+        else {
+            return Ok(());
+        };
+        let workspace_name = workspace_policy.workspace_name;
         let content = format!(
             "File-list clipboard payload: {} path{}",
             file_list.paths.len(),
             if file_list.paths.len() == 1 { "" } else { "s" }
         );
         let blip = self.store.insert_blip(&NewBlip {
-            workspace_name,
+            workspace_name: workspace_name.clone(),
             source_app: None,
             content_type: ContentType::PlainText,
             language: None,
@@ -567,6 +698,7 @@ where
                 inline_text: None,
                 metadata: serde_json::json!({
                     "policy": "metadata_only",
+                    "capture_policy": payload_policy_metadata(PayloadKind::FileList, &workspace_name),
                     "path_count": file_list.paths.len(),
                     "paths": file_list
                         .paths
@@ -591,10 +723,10 @@ where
         kind: PayloadKind,
         rich_text: ClipboardRichText,
     ) -> Result<(), DaemonError> {
-        let workspace_name = self
-            .store
-            .get_sticky_workspace()?
-            .unwrap_or_else(|| INBOX_WORKSPACE.to_owned());
+        let Some(workspace_policy) = self.destination_workspace_policy(kind)? else {
+            return Ok(());
+        };
+        let workspace_name = workspace_policy.workspace_name;
         let fallback = rich_text
             .plain_text
             .clone()
@@ -605,7 +737,7 @@ where
             _ => "clipboard:rich-text",
         };
         let blip = self.store.insert_blip(&NewBlip {
-            workspace_name,
+            workspace_name: workspace_name.clone(),
             source_app: None,
             content_type: ContentType::PlainText,
             language: None,
@@ -626,6 +758,8 @@ where
                 preview_ref: None,
                 inline_text: rich_text.plain_text,
                 metadata: serde_json::json!({
+                    "capture_policy": payload_policy_metadata(kind, &workspace_name),
+                    "redaction": redaction_hook_metadata(),
                     "fallback": "plain_text",
                     "render_policy": "do_not_render_privileged",
                 }),
@@ -638,12 +772,13 @@ where
     }
 
     fn ingest_clipboard_unknown(&mut self, unknown: ClipboardUnknown) -> Result<(), DaemonError> {
-        let workspace_name = self
-            .store
-            .get_sticky_workspace()?
-            .unwrap_or_else(|| INBOX_WORKSPACE.to_owned());
+        let Some(workspace_policy) = self.destination_workspace_policy(PayloadKind::Unknown)?
+        else {
+            return Ok(());
+        };
+        let workspace_name = workspace_policy.workspace_name;
         let blip = self.store.insert_blip(&NewBlip {
-            workspace_name,
+            workspace_name: workspace_name.clone(),
             source_app: None,
             content_type: ContentType::PlainText,
             language: None,
@@ -668,6 +803,7 @@ where
                     inline_text: None,
                     metadata: serde_json::json!({
                         "policy": "unsupported_format",
+                        "capture_policy": payload_policy_metadata(PayloadKind::Unknown, &workspace_name),
                     }),
                     byte_size: i64::try_from(unknown.byte_size).map_err(|_| {
                         BlipError::InvalidInput {
@@ -690,6 +826,8 @@ where
                     inline_text: None,
                     metadata: serde_json::json!({
                         "policy": "unsupported_format",
+                        "capture_policy": payload_policy_metadata(PayloadKind::Unknown, &workspace_name),
+                        "redaction": redaction_hook_metadata(),
                     }),
                     bytes: unknown.bytes,
                 },
@@ -698,6 +836,52 @@ where
         }
 
         Ok(())
+    }
+
+    fn destination_workspace_name(&self) -> Result<String, BlipError> {
+        self.store
+            .get_sticky_workspace()
+            .map(|workspace| workspace.unwrap_or_else(|| INBOX_WORKSPACE.to_owned()))
+    }
+
+    fn destination_workspace_policy(
+        &mut self,
+        kind: PayloadKind,
+    ) -> Result<Option<WorkspacePolicy>, BlipError> {
+        let workspace_name = self.destination_workspace_name()?;
+        let policy = self
+            .store
+            .get_workspace_policy(&workspace_name)?
+            .unwrap_or_else(|| WorkspacePolicy::default_for_workspace(workspace_name.clone()));
+
+        let global_allowed = match kind {
+            PayloadKind::Text => self.capture.text_enabled(),
+            PayloadKind::Image => self.capture.image_enabled(),
+            PayloadKind::FileList => self.capture.file_list_enabled(),
+            PayloadKind::Html => self.capture.html_enabled(),
+            PayloadKind::Rtf => self.capture.rtf_enabled(),
+            PayloadKind::Unknown => self.capture.unknown_enabled(),
+        };
+
+        if !global_allowed {
+            self.store.record_rich_payload_capture_skipped(
+                &workspace_name,
+                kind,
+                "disabled_by_global_config",
+            )?;
+            return Ok(None);
+        }
+
+        if !policy.allows_capture(kind) {
+            self.store.record_rich_payload_capture_skipped(
+                &workspace_name,
+                kind,
+                "disabled_by_workspace_policy",
+            )?;
+            return Ok(None);
+        }
+
+        Ok(Some(policy))
     }
 
     fn blob_data_dir(&self) -> PathBuf {
@@ -716,19 +900,35 @@ where
         blips
             .into_iter()
             .map(|blip| {
-                let payloads = payloads_by_blip_id.remove(&blip.id).unwrap_or_default();
+                let visibility =
+                    self.rich_payload_visibility_for_workspace(&blip.workspace_name)?;
+                let payloads = match visibility {
+                    RichPayloadVisibility::Hidden => Vec::new(),
+                    RichPayloadVisibility::Metadata | RichPayloadVisibility::SafePreview => {
+                        payloads_by_blip_id.remove(&blip.id).unwrap_or_default()
+                    }
+                };
                 let is_redacted = blip.is_redacted;
+                let payloads =
+                    payload_summaries_from_projections(&payloads, &blob_store, is_redacted)?;
                 Ok(blip_summary(
                     blip,
-                    payload_summaries_from_projections(&payloads, &blob_store, is_redacted)?,
+                    apply_payload_visibility(payloads, visibility),
                 ))
             })
             .collect()
     }
 
     fn blip_detail_from_store(&self, blip: Blip) -> Result<BlipDetail, BlipError> {
-        let payloads = self.store.get_blip_payloads(&blip.id)?;
+        let visibility = self.rich_payload_visibility_for_workspace(&blip.workspace_name)?;
+        let payloads = match visibility {
+            RichPayloadVisibility::Hidden => Vec::new(),
+            RichPayloadVisibility::Metadata | RichPayloadVisibility::SafePreview => {
+                self.store.get_blip_payloads(&blip.id)?
+            }
+        };
         let blob_store = LocalBlobStore::new(self.blob_data_dir());
+        let payloads = payload_summaries(&payloads, &blob_store, blip.is_redacted)?;
         Ok(BlipDetail {
             id: blip.id,
             workspace: blip.workspace_name,
@@ -741,9 +941,60 @@ where
             is_redacted: blip.is_redacted,
             tags: blip.tags,
             created_at: blip.created_at,
-            payloads: payload_summaries(&payloads, &blob_store, blip.is_redacted)?,
+            payloads: apply_payload_visibility(payloads, visibility),
         })
     }
+
+    fn workspace_summary(
+        &self,
+        workspace: blip_core::Workspace,
+    ) -> Result<WorkspaceSummary, BlipError> {
+        let policy = self
+            .store
+            .get_workspace_policy(&workspace.name)?
+            .unwrap_or_else(|| WorkspacePolicy::default_for_workspace(workspace.name.clone()));
+        Ok(WorkspaceSummary {
+            name: workspace.name,
+            agent_access: workspace.agent_access,
+            sticky_capture: workspace.sticky_capture,
+            rich_capture_enabled: policy.rich_capture_enabled,
+            image_capture_enabled: policy.image_capture_enabled,
+            rich_payload_visibility: policy.rich_payload_visibility.as_str().to_owned(),
+            agent_raw_payload_access: policy.agent_raw_payload_access,
+        })
+    }
+
+    fn rich_payload_visibility_for_workspace(
+        &self,
+        workspace_name: &str,
+    ) -> Result<RichPayloadVisibility, BlipError> {
+        let policy = self
+            .store
+            .get_workspace_policy(workspace_name)?
+            .unwrap_or_else(|| WorkspacePolicy::default_for_workspace(workspace_name));
+        Ok(policy.rich_payload_visibility)
+    }
+}
+
+fn apply_payload_visibility(
+    payloads: Vec<PayloadSummary>,
+    visibility: RichPayloadVisibility,
+) -> Vec<PayloadSummary> {
+    if visibility != RichPayloadVisibility::Metadata {
+        return payloads;
+    }
+
+    payloads
+        .into_iter()
+        .map(|mut payload| {
+            if payload.payload_kind != PayloadKind::Text.as_str() {
+                payload.preview_state = PayloadPreviewState::MetadataOnly;
+                payload.preview_text = None;
+                payload.preview_ref = None;
+            }
+            payload
+        })
+        .collect()
 }
 
 fn blip_summary(blip: blip_core::BlipSummary, payloads: Vec<PayloadSummary>) -> BlipSummary {
@@ -1210,12 +1461,25 @@ fn audit_event_summary(event: AuditEvent) -> AuditEventSummary {
     }
 }
 
-fn workspace_summary(workspace: blip_core::Workspace) -> WorkspaceSummary {
-    WorkspaceSummary {
-        name: workspace.name,
-        agent_access: workspace.agent_access,
-        sticky_capture: workspace.sticky_capture,
-    }
+fn payload_policy_metadata(kind: PayloadKind, workspace_name: &str) -> serde_json::Value {
+    let capture_decision = match kind {
+        PayloadKind::Text => "text",
+        PayloadKind::FileList => "metadata_only",
+        PayloadKind::Html | PayloadKind::Rtf => "text_fallback_and_blob",
+        PayloadKind::Image | PayloadKind::Unknown => "blob",
+    };
+    serde_json::json!({
+        "capture_decision": capture_decision,
+        "workspace_at_capture": workspace_name,
+    })
+}
+
+fn redaction_hook_metadata() -> serde_json::Value {
+    serde_json::json!({
+        "status": "not_processed",
+        "processor": null,
+        "ocr_required": false,
+    })
 }
 
 fn path_metadata(path: &Path) -> serde_json::Value {
@@ -1790,6 +2054,51 @@ mod tests {
             }
             other => panic!("expected workspaces response, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn dispatch_sets_workspace_policy_and_records_audit() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "policy-1",
+            DaemonCommand::SetWorkspacePolicy,
+            DaemonRequestPayload::SetWorkspacePolicy {
+                workspace: "inbox".to_owned(),
+                rich_capture_enabled: false,
+                image_capture_enabled: false,
+                rich_payload_visibility: "hidden".to_owned(),
+                agent_raw_payload_access: false,
+            },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        match response.payload {
+            Some(DaemonResponsePayload::WorkspacePolicySet(workspace)) => {
+                assert_eq!(workspace.name, "inbox");
+                assert!(!workspace.rich_capture_enabled);
+                assert!(!workspace.image_capture_enabled);
+                assert_eq!(workspace.rich_payload_visibility, "hidden");
+                assert!(!workspace.agent_raw_payload_access);
+            }
+            other => panic!("expected workspace policy response, got {other:?}"),
+        }
+        let audit_events = runtime
+            .store
+            .list_audit_events()
+            .expect("audit events should list");
+        assert!(audit_events.iter().any(|event| {
+            event.event_type == blip_core::AuditEventType::WorkspacePolicyChanged
+                && event.target_workspace.as_deref() == Some("inbox")
+        }));
     }
 
     #[test]
@@ -2634,6 +2943,10 @@ mod tests {
         assert_eq!(image_payload.byte_size, 8);
         assert_eq!(image_payload.metadata["width"], 1);
         assert_eq!(image_payload.metadata["height"], 1);
+        assert_eq!(
+            image_payload.metadata["redaction"]["status"],
+            "not_processed"
+        );
         assert!(image_payload.blob_ref.is_some());
 
         let blob_store = LocalBlobStore::new(&root);
@@ -2649,6 +2962,188 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_skips_image_capture_disabled_by_global_config_and_audits_drop() {
+        let store = BlipStore::in_memory().expect("store should initialize");
+        let source = ScriptedIngestionSource {
+            events: vec![
+                RuntimeEvent::Shutdown,
+                RuntimeEvent::ClipboardImageChanged {
+                    image: sample_clipboard_image(),
+                },
+            ],
+            calls: 0,
+        };
+        let capture = CaptureConfig {
+            image: false,
+            ..CaptureConfig::default()
+        };
+        let mut runtime =
+            DaemonRuntime::with_capture_config("/tmp/blipcoard-test.db", store, source, capture);
+
+        runtime.run().expect("runtime should skip image capture");
+
+        let blips = runtime
+            .store
+            .list_blips("inbox")
+            .expect("inbox blips should be listed");
+        assert!(blips.is_empty());
+        let audit_events = runtime
+            .store
+            .list_audit_events()
+            .expect("audit events should list");
+        assert!(audit_events.iter().any(|event| {
+            event.event_type == blip_core::AuditEventType::RichPayloadCaptureSkipped
+                && event.target_workspace.as_deref() == Some("inbox")
+                && event
+                    .details_json
+                    .as_deref()
+                    .is_some_and(|details| details.contains("disabled_by_global_config"))
+        }));
+    }
+
+    #[test]
+    fn dispatch_hides_payload_summaries_when_workspace_policy_hides_rich_payloads() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .set_workspace_policy(&WorkspacePolicy {
+                workspace_name: "inbox".to_owned(),
+                rich_capture_enabled: true,
+                image_capture_enabled: true,
+                rich_payload_visibility: blip_core::RichPayloadVisibility::Hidden,
+                agent_raw_payload_access: false,
+            })
+            .expect("policy should update");
+        let blip = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".to_owned(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "File-list clipboard payload: 1 path".to_owned(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: vec!["rich:clipboard".to_owned()],
+            })
+            .expect("blip should insert");
+        store
+            .insert_metadata_payload(
+                &blip.id,
+                &NewClipboardMetadataPayload {
+                    kind: PayloadKind::FileList,
+                    mime_type: Some("text/uri-list".to_owned()),
+                    platform_format: None,
+                    source_app: None,
+                    preview_ref: None,
+                    inline_text: None,
+                    metadata: serde_json::json!({
+                        "policy": "metadata_only",
+                        "path_count": 1,
+                        "paths": [{"display_path": "/tmp/private.png"}],
+                    }),
+                    byte_size: 16,
+                },
+            )
+            .expect("payload should insert");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "hidden-payloads",
+            DaemonCommand::GetBlip,
+            DaemonRequestPayload::GetBlip { blip_id: blip.id },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        match response.payload {
+            Some(DaemonResponsePayload::Blip(detail)) => {
+                assert!(detail.payloads.is_empty());
+            }
+            other => panic!("expected blip detail response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_strips_preview_fields_when_workspace_policy_is_metadata_only() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .set_workspace_policy(&WorkspacePolicy {
+                workspace_name: "inbox".to_owned(),
+                rich_capture_enabled: true,
+                image_capture_enabled: true,
+                rich_payload_visibility: RichPayloadVisibility::Metadata,
+                agent_raw_payload_access: false,
+            })
+            .expect("policy should update");
+        let blip = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".to_owned(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "HTML clipboard payload".to_owned(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: vec!["rich:clipboard".to_owned()],
+            })
+            .expect("blip should insert");
+        let blob_store = LocalBlobStore::new(unique_temp_dir("metadata-visibility"));
+        store
+            .insert_blob_payload(
+                &blip.id,
+                &NewClipboardPayload {
+                    kind: PayloadKind::Html,
+                    mime_type: Some("text/html".to_owned()),
+                    platform_format: None,
+                    source_app: None,
+                    preview_ref: None,
+                    inline_text: Some("private fallback".to_owned()),
+                    metadata: serde_json::json!({
+                        "fallback": "plain_text",
+                    }),
+                    bytes: b"<p>private fallback</p>".to_vec(),
+                },
+                &blob_store,
+            )
+            .expect("payload should insert");
+        let mut runtime = DaemonRuntime::new(
+            "/tmp/blipcoard-test.db",
+            store,
+            ScriptedIngestionSource {
+                events: Vec::new(),
+                calls: 0,
+            },
+        );
+
+        let response = runtime.dispatch_daemon_request(DaemonRequest::new(
+            "metadata-payloads",
+            DaemonCommand::GetBlip,
+            DaemonRequestPayload::GetBlip { blip_id: blip.id },
+        ));
+
+        assert_eq!(response.status, blip_api::DaemonResponseStatus::Ok);
+        match response.payload {
+            Some(DaemonResponsePayload::Blip(detail)) => {
+                let html = detail
+                    .payloads
+                    .iter()
+                    .find(|payload| payload.payload_kind == "html")
+                    .expect("html payload should remain visible");
+                assert_eq!(html.preview_state, PayloadPreviewState::MetadataOnly);
+                assert!(html.preview_text.is_none());
+                assert!(html.preview_ref.is_none());
+                assert!(html.has_blob);
+            }
+            other => panic!("expected blip detail response, got {other:?}"),
+        }
     }
 
     #[test]

@@ -158,6 +158,14 @@ Must have:
 - content hash dedupe and retention/garbage-collection rules for blob data
 - privacy controls for image capture, screenshot previews, and agent access to
   rich payloads
+- global `[capture]` config can disable capture entirely or by payload type, and
+  workspace policy can further disable rich/image capture or hide rich payload
+  summaries
+- raw binary agent payload access is denied by default and must be explicitly
+  allowed by workspace policy
+- daemon-observed policy drops and future preview/export/open/agent payload reads
+  use dedicated audit event types rather than ordinary list-view audit entries;
+  globally disabled watcher reads avoid reading sensitive payload bytes at all
 - migration path from text-only `Blip.content` records to typed payload records
 
 Storage notes:

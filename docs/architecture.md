@@ -294,12 +294,20 @@ Preview rules:
 
 Policy rules:
 
-- rich payload capture should be configurable by payload type
-- screenshots and images should be treated as sensitive by default
-- agents should not receive raw binary payloads unless workspace policy allows it
+- rich payload capture is configurable globally under `[capture]` with
+  `enabled`, `text`, `image`, `file_list`, `html`, `rtf`, `unknown`,
+  `max_image_bytes`, and `image_previews`
+- workspace policy can further disable rich capture or image capture for that
+  destination workspace, and can hide typed payload summaries from list/detail
+  responses
+- screenshots and images should be treated as sensitive local data even when
+  capture is enabled
+- agents should not receive raw binary payloads unless workspace policy
+  explicitly enables `agent_raw_payload_access`
 - agents receive metadata and plain-text fallbacks for HTML, RTF, file-list, and
   unknown payloads by default, not privileged renders or imported file contents
-- thumbnail reads, raw payload exports, and agent payload reads should be audited
+- thumbnail reads, raw payload exports, desktop opens, and agent payload reads
+  have dedicated audit event types separate from ordinary list views
 - deletion must remove both SQLite records and blob data when no other blip
   references the same blob
 

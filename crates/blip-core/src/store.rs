@@ -2,7 +2,8 @@ use crate::LocalBlobStore;
 use crate::domain::{
     ActorType, AuditEvent, AuditEventType, Blip, BlipMove, BlipSummary, ClipboardPayload,
     ClipboardPayloadSummary, ContentType, NewBlip, NewClipboardMetadataPayload,
-    NewClipboardPayload, NewWorkspace, PayloadKind, Workspace,
+    NewClipboardPayload, NewWorkspace, PayloadAccessAudit, PayloadKind, RichPayloadVisibility,
+    Workspace, WorkspacePolicy,
 };
 use crate::error::{BlipError, is_sqlite_busy_error};
 use crate::secrets::add_secret_tags;
@@ -23,7 +24,7 @@ const DEFAULT_PAYLOAD_INLINE_PREVIEW_CHARS: i64 = 4096;
 const BUSY_RETRY_ATTEMPTS: usize = 5;
 const BUSY_RETRY_DELAY: Duration = Duration::from_millis(25);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
-const SCHEMA_VERSION: i32 = 5;
+const SCHEMA_VERSION: i32 = 6;
 
 struct Migration {
     version: i32,
@@ -50,6 +51,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 5,
         sql: include_str!("sql/005_typed_payloads.sql"),
+    },
+    Migration {
+        version: 6,
+        sql: include_str!("sql/006_rich_payload_policy_audit.sql"),
     },
 ];
 
@@ -217,6 +222,63 @@ impl BlipStore {
         Self::get_workspace_from(&self.conn, name)
     }
 
+    pub fn get_workspace_policy(&self, name: &str) -> Result<Option<WorkspacePolicy>, BlipError> {
+        Self::get_workspace_policy_from(&self.conn, name)
+    }
+
+    pub fn set_workspace_policy(
+        &mut self,
+        policy: &WorkspacePolicy,
+    ) -> Result<WorkspacePolicy, BlipError> {
+        self.with_busy_retry(|store| store.set_workspace_policy_once(policy))
+    }
+
+    fn set_workspace_policy_once(
+        &mut self,
+        policy: &WorkspacePolicy,
+    ) -> Result<WorkspacePolicy, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        if Self::get_workspace_from(&tx, &policy.workspace_name)?.is_none() {
+            return Err(BlipError::WorkspaceNotFound(policy.workspace_name.clone()));
+        }
+
+        Self::upsert_workspace_policy(&tx, policy)?;
+        Self::insert_audit_event(
+            &tx,
+            ActorType::User,
+            None,
+            AuditEventType::WorkspacePolicyChanged,
+            None,
+            Some(policy.workspace_name.clone()),
+            Some(workspace_policy_details(policy).to_string()),
+        )?;
+
+        let updated = Self::get_workspace_policy_from(&tx, &policy.workspace_name)?
+            .ok_or_else(|| BlipError::WorkspaceNotFound(policy.workspace_name.clone()))?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    pub fn require_agent_raw_payload_access(&self, workspace: &str) -> Result<(), BlipError> {
+        let workspace_record = self
+            .get_workspace(workspace)?
+            .ok_or_else(|| BlipError::WorkspaceNotFound(workspace.to_owned()))?;
+        workspace_record.require_agent_read_access()?;
+
+        let policy = self
+            .get_workspace_policy(workspace)?
+            .unwrap_or_else(|| WorkspacePolicy::default_for_workspace(workspace));
+
+        if policy.agent_raw_payload_access {
+            Ok(())
+        } else {
+            Err(BlipError::AgentRawPayloadAccessDenied(workspace.to_owned()))
+        }
+    }
+
     fn get_workspace_from(conn: &Connection, name: &str) -> Result<Option<Workspace>, BlipError> {
         conn
             .query_row(
@@ -237,6 +299,38 @@ impl BlipStore {
             )
             .optional()
             .map_err(BlipError::from)
+    }
+
+    fn get_workspace_policy_from(
+        conn: &Connection,
+        name: &str,
+    ) -> Result<Option<WorkspacePolicy>, BlipError> {
+        conn.query_row(
+            "SELECT workspace_name, rich_capture_enabled, image_capture_enabled,
+                    rich_payload_visibility, agent_raw_payload_access
+             FROM workspace_policies WHERE workspace_name = ?1",
+            [name],
+            |row| {
+                Ok(WorkspacePolicy {
+                    workspace_name: row.get(0)?,
+                    rich_capture_enabled: row.get(1)?,
+                    image_capture_enabled: row.get(2)?,
+                    rich_payload_visibility: RichPayloadVisibility::parse(
+                        row.get::<_, String>(3)?.as_str(),
+                    )
+                    .map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?,
+                    agent_raw_payload_access: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(BlipError::from)
     }
 
     pub fn set_active_workspace(&mut self, name: &str) -> Result<(), BlipError> {
@@ -412,6 +506,10 @@ impl BlipStore {
 
     pub fn get_blip_payloads(&self, blip_id: &str) -> Result<Vec<ClipboardPayload>, BlipError> {
         Self::get_blip_payloads_from(&self.conn, blip_id)
+    }
+
+    pub fn get_payload(&self, payload_id: &str) -> Result<Option<ClipboardPayload>, BlipError> {
+        Self::get_payload_from(&self.conn, payload_id)
     }
 
     pub fn get_blip_payload_summaries(
@@ -599,6 +697,87 @@ impl BlipStore {
         blob_store.with_lock(|| {
             let referenced_blob_refs = self.referenced_blob_refs()?;
             blob_store.garbage_collect_unlocked(&referenced_blob_refs)
+        })
+    }
+
+    pub fn record_rich_payload_capture_skipped(
+        &mut self,
+        workspace: &str,
+        kind: PayloadKind,
+        reason: &str,
+    ) -> Result<(), BlipError> {
+        let details = serde_json::json!({
+            "payload_kind": kind.as_str(),
+            "decision": "denied",
+            "reason": reason,
+        });
+        self.record_audit_event(
+            ActorType::System,
+            None,
+            AuditEventType::RichPayloadCaptureSkipped,
+            None,
+            Some(workspace.to_owned()),
+            Some(details.to_string()),
+        )
+    }
+
+    pub fn record_payload_access_event(
+        &mut self,
+        audit: &PayloadAccessAudit,
+    ) -> Result<(), BlipError> {
+        if !matches!(
+            audit.event_type,
+            AuditEventType::PayloadPreviewRead
+                | AuditEventType::PayloadRawExported
+                | AuditEventType::DesktopPayloadOpened
+                | AuditEventType::AgentPayloadRead
+        ) {
+            return Err(BlipError::InvalidInput {
+                field: "event_type",
+                reason: "must be a rich payload access audit event",
+            });
+        }
+
+        let details = serde_json::json!({
+            "payload_id": audit.payload_id,
+            "payload_kind": audit.payload_kind.as_str(),
+            "access_mode": audit.access_mode,
+            "decision": audit.decision,
+        });
+        self.record_audit_event(
+            audit.actor_type,
+            audit.actor_id.clone(),
+            audit.event_type,
+            audit.target_blip_id.clone(),
+            audit.target_workspace.clone(),
+            Some(details.to_string()),
+        )
+    }
+
+    fn record_audit_event(
+        &mut self,
+        actor_type: ActorType,
+        actor_id: Option<String>,
+        event_type: AuditEventType,
+        target_blip_id: Option<String>,
+        target_workspace: Option<String>,
+        details_json: Option<String>,
+    ) -> Result<(), BlipError> {
+        self.with_busy_retry(|store| {
+            let tx = store
+                .conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            Self::insert_audit_event(
+                &tx,
+                actor_type,
+                actor_id.clone(),
+                event_type,
+                target_blip_id.clone(),
+                target_workspace.clone(),
+                details_json.clone(),
+            )?;
+            tx.commit()?;
+            Ok(())
         })
     }
 
@@ -1187,6 +1366,10 @@ impl BlipStore {
         };
 
         if affected_rows > 0 {
+            Self::upsert_workspace_policy(
+                conn,
+                &WorkspacePolicy::default_for_workspace(workspace.name.clone()),
+            )?;
             Self::insert_audit_event(
                 conn,
                 ActorType::System,
@@ -1199,6 +1382,33 @@ impl BlipStore {
         }
 
         Ok(affected_rows > 0)
+    }
+
+    fn upsert_workspace_policy(
+        conn: &Connection,
+        policy: &WorkspacePolicy,
+    ) -> Result<(), BlipError> {
+        conn.execute(
+            "INSERT INTO workspace_policies (
+                workspace_name, rich_capture_enabled, image_capture_enabled,
+                rich_payload_visibility, agent_raw_payload_access, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(workspace_name) DO UPDATE SET
+                rich_capture_enabled = excluded.rich_capture_enabled,
+                image_capture_enabled = excluded.image_capture_enabled,
+                rich_payload_visibility = excluded.rich_payload_visibility,
+                agent_raw_payload_access = excluded.agent_raw_payload_access,
+                updated_at = excluded.updated_at",
+            params![
+                policy.workspace_name,
+                policy.rich_capture_enabled,
+                policy.image_capture_enabled,
+                policy.rich_payload_visibility.as_str(),
+                policy.agent_raw_payload_access,
+                Utc::now(),
+            ],
+        )?;
+        Ok(())
     }
 
     fn ensure_active_workspace(conn: &Connection, workspace_name: &str) -> Result<(), BlipError> {
@@ -1366,6 +1576,15 @@ fn validate_blob_payload(payload: &NewClipboardPayload) -> Result<(), BlipError>
     }
 
     Ok(())
+}
+
+fn workspace_policy_details(policy: &WorkspacePolicy) -> serde_json::Value {
+    serde_json::json!({
+        "rich_capture_enabled": policy.rich_capture_enabled,
+        "image_capture_enabled": policy.image_capture_enabled,
+        "rich_payload_visibility": policy.rich_payload_visibility.as_str(),
+        "agent_raw_payload_access": policy.agent_raw_payload_access,
+    })
 }
 
 fn validate_metadata_payload(payload: &NewClipboardMetadataPayload) -> Result<(), BlipError> {
@@ -2342,6 +2561,111 @@ mod tests {
                     .as_deref()
                     .is_some_and(|details| details.contains("\"enabled\":false"))
         }));
+    }
+
+    #[test]
+    fn workspace_policy_defaults_deny_agent_raw_payload_access() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&NewWorkspace {
+                name: "agent-feed".into(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should create");
+
+        let policy = store
+            .get_workspace_policy("agent-feed")
+            .expect("policy should read")
+            .expect("policy should exist");
+
+        assert!(policy.rich_capture_enabled);
+        assert!(policy.image_capture_enabled);
+        assert_eq!(
+            policy.rich_payload_visibility,
+            RichPayloadVisibility::SafePreview
+        );
+        assert!(!policy.agent_raw_payload_access);
+        assert!(matches!(
+            store.require_agent_raw_payload_access("agent-feed"),
+            Err(BlipError::AgentRawPayloadAccessDenied(workspace)) if workspace == "agent-feed"
+        ));
+    }
+
+    #[test]
+    fn workspace_policy_changes_are_audited() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        store
+            .create_workspace(&NewWorkspace {
+                name: "agent-feed".into(),
+                description: None,
+                color: None,
+                agent_access: true,
+                sticky_capture: false,
+                retention_days: None,
+            })
+            .expect("workspace should create");
+        let policy = WorkspacePolicy {
+            workspace_name: "agent-feed".to_owned(),
+            rich_capture_enabled: false,
+            image_capture_enabled: false,
+            rich_payload_visibility: RichPayloadVisibility::Hidden,
+            agent_raw_payload_access: true,
+        };
+
+        let updated = store
+            .set_workspace_policy(&policy)
+            .expect("policy should update");
+
+        assert_eq!(updated, policy);
+        store
+            .require_agent_raw_payload_access("agent-feed")
+            .expect("raw agent access should be explicitly allowed");
+        let audit_events = store.list_audit_events().expect("audit list should work");
+        assert!(audit_events.iter().any(|event| {
+            event.event_type == AuditEventType::WorkspacePolicyChanged
+                && event.target_workspace.as_deref() == Some("agent-feed")
+                && event
+                    .details_json
+                    .as_deref()
+                    .is_some_and(|details| details.contains("\"agent_raw_payload_access\":true"))
+        }));
+    }
+
+    #[test]
+    fn payload_access_audit_events_are_separate_from_list_reads() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let blip = insert_test_blip(&mut store, "image placeholder");
+        store
+            .record_payload_access_event(&PayloadAccessAudit {
+                actor_type: ActorType::Agent,
+                actor_id: Some("agent-1".to_owned()),
+                event_type: AuditEventType::AgentPayloadRead,
+                target_blip_id: Some(blip.id.clone()),
+                target_workspace: Some("inbox".to_owned()),
+                payload_id: format!("{}:payload:image", blip.id),
+                payload_kind: PayloadKind::Image,
+                access_mode: "raw".to_owned(),
+                decision: "denied".to_owned(),
+            })
+            .expect("payload access audit should write");
+
+        let audit_events = store.list_audit_events().expect("audit list should work");
+        assert!(audit_events.iter().any(|event| {
+            event.event_type == AuditEventType::AgentPayloadRead
+                && event
+                    .details_json
+                    .as_deref()
+                    .is_some_and(|details| details.contains("\"access_mode\":\"raw\""))
+        }));
+        assert!(
+            !audit_events
+                .iter()
+                .any(|event| event.event_type == AuditEventType::BlipsRead)
+        );
     }
 
     #[test]

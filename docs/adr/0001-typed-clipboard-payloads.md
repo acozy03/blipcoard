@@ -164,6 +164,26 @@ with available format identifiers, advertised MIME type or target names, byte
 size, source app, capture time, and other structured metadata. Unknown payloads
 must not be silently downgraded to plain text or hidden as empty clipboard data.
 
+## Privacy and Policy Controls
+
+Rich payload capture is controlled in two layers. The global `[capture]` config
+can disable all capture or individual payload kinds before the platform watcher
+reads them. The daemon repeats the same policy check before persistence so tests
+and future ingestion sources cannot bypass config. Workspace policy can narrow
+that further for the destination workspace by disabling rich capture, disabling
+image capture, hiding rich payload summaries, or explicitly allowing raw agent
+payload access.
+
+Raw agent payload access defaults to denied and is separate from text
+`agent_access`. List and detail views only return safe summaries; future preview,
+export, desktop-open, and agent-payload reads must use the dedicated audit event
+types added with the workspace policy migration.
+
+Image, HTML, RTF, and unknown payload metadata now carries a no-op redaction hook
+marker. This records that no OCR or screenshot processing happened in this
+phase, while leaving a stable place for future local processors to record applied
+redaction without changing the storage model again.
+
 The portable `arboard` backend used for this phase exposes file-list and HTML
 reads, but not RTF reads or generic clipboard format enumeration. The shared
 storage and daemon paths support `rtf` and `unknown` so platform-specific readers

@@ -40,6 +40,12 @@ pub struct ClipboardWatcherConfig {
     pub poll_interval: Duration,
     /// Maximum decoded image byte size accepted before PNG normalization.
     pub max_image_bytes: usize,
+    pub capture_text: bool,
+    pub capture_image: bool,
+    pub capture_file_list: bool,
+    pub capture_html: bool,
+    pub capture_rtf: bool,
+    pub capture_unknown: bool,
 }
 
 impl Default for ClipboardWatcherConfig {
@@ -47,6 +53,12 @@ impl Default for ClipboardWatcherConfig {
         Self {
             poll_interval: DEFAULT_POLL_INTERVAL,
             max_image_bytes: DEFAULT_MAX_IMAGE_BYTES,
+            capture_text: true,
+            capture_image: true,
+            capture_file_list: true,
+            capture_html: true,
+            capture_rtf: true,
+            capture_unknown: true,
         }
     }
 }
@@ -252,6 +264,7 @@ pub trait ClipboardWatcher {
 pub struct PollingClipboardWatcher<R> {
     reader: R,
     poll_interval: Duration,
+    config: ClipboardWatcherConfig,
     last_payload: Option<ClipboardPayloadFingerprint>,
 }
 
@@ -263,6 +276,7 @@ where
         Self {
             reader,
             poll_interval: config.poll_interval,
+            config,
             last_payload: None,
         }
     }
@@ -277,7 +291,9 @@ where
     R: ClipboardReader,
 {
     fn poll_next(&mut self) -> Result<Option<ClipboardEvent>, ClipboardError> {
-        if let Some(file_list) = self.reader.read_file_list()? {
+        if self.config.capture_file_list
+            && let Some(file_list) = self.reader.read_file_list()?
+        {
             let fingerprint = ClipboardPayloadFingerprint::file_list(&file_list);
             if self.last_payload.as_ref() == Some(&fingerprint) {
                 return Ok(None);
@@ -287,7 +303,9 @@ where
             return Ok(Some(ClipboardEvent::file_list(file_list)));
         }
 
-        if let Some(html) = self.reader.read_html()? {
+        if self.config.capture_html
+            && let Some(html) = self.reader.read_html()?
+        {
             let fingerprint = ClipboardPayloadFingerprint::rich_text("html", &html);
             if self.last_payload.as_ref() == Some(&fingerprint) {
                 return Ok(None);
@@ -297,7 +315,9 @@ where
             return Ok(Some(ClipboardEvent::html(html)));
         }
 
-        if let Some(rtf) = self.reader.read_rtf()? {
+        if self.config.capture_rtf
+            && let Some(rtf) = self.reader.read_rtf()?
+        {
             let fingerprint = ClipboardPayloadFingerprint::rich_text("rtf", &rtf);
             if self.last_payload.as_ref() == Some(&fingerprint) {
                 return Ok(None);
@@ -307,7 +327,9 @@ where
             return Ok(Some(ClipboardEvent::rtf(rtf)));
         }
 
-        if let Some(text) = self.reader.read_text()? {
+        if self.config.capture_text
+            && let Some(text) = self.reader.read_text()?
+        {
             let fingerprint = ClipboardPayloadFingerprint::text(&text);
             if self.last_payload.as_ref() == Some(&fingerprint) {
                 return Ok(None);
@@ -317,7 +339,9 @@ where
             return Ok(Some(ClipboardEvent::text(text)));
         }
 
-        if let Some(image) = self.reader.read_image()? {
+        if self.config.capture_image
+            && let Some(image) = self.reader.read_image()?
+        {
             let fingerprint = ClipboardPayloadFingerprint::image(&image);
             if self.last_payload.as_ref() == Some(&fingerprint) {
                 return Ok(None);
@@ -327,7 +351,9 @@ where
             return Ok(Some(ClipboardEvent::image(image)));
         }
 
-        if let Some(unknown) = self.reader.read_unknown()? {
+        if self.config.capture_unknown
+            && let Some(unknown) = self.reader.read_unknown()?
+        {
             let fingerprint = ClipboardPayloadFingerprint::unknown(&unknown);
             if self.last_payload.as_ref() == Some(&fingerprint) {
                 return Ok(None);
@@ -894,6 +920,7 @@ mod tests {
             ClipboardWatcherConfig {
                 poll_interval: Duration::from_secs(2),
                 max_image_bytes: 123,
+                ..ClipboardWatcherConfig::default()
             },
         );
 

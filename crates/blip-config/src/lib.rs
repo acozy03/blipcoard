@@ -23,29 +23,93 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlipConfig {
     pub database_path: PathBuf,
+    #[serde(default)]
+    pub capture: CaptureConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaptureConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub text: bool,
+    #[serde(default = "default_true")]
+    pub image: bool,
+    #[serde(default = "default_true")]
+    pub file_list: bool,
+    #[serde(default = "default_true")]
+    pub html: bool,
+    #[serde(default = "default_true")]
+    pub rtf: bool,
+    #[serde(default = "default_true")]
+    pub unknown: bool,
+    #[serde(default = "default_max_image_bytes")]
+    pub max_image_bytes: usize,
+    #[serde(default = "default_true")]
+    pub image_previews: bool,
+}
+
+impl Default for CaptureConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            text: true,
+            image: true,
+            file_list: true,
+            html: true,
+            rtf: true,
+            unknown: true,
+            max_image_bytes: default_max_image_bytes(),
+            image_previews: true,
+        }
+    }
+}
+
+impl CaptureConfig {
+    pub fn text_enabled(&self) -> bool {
+        self.enabled && self.text
+    }
+
+    pub fn image_enabled(&self) -> bool {
+        self.enabled && self.image
+    }
+
+    pub fn file_list_enabled(&self) -> bool {
+        self.enabled && self.file_list
+    }
+
+    pub fn html_enabled(&self) -> bool {
+        self.enabled && self.html
+    }
+
+    pub fn rtf_enabled(&self) -> bool {
+        self.enabled && self.rtf
+    }
+
+    pub fn unknown_enabled(&self) -> bool {
+        self.enabled && self.unknown
+    }
 }
 
 impl BlipConfig {
     pub fn load_or_create() -> Result<Self, ConfigError> {
+        let config_path = config_file_path()?;
+        let mut config = if config_path.exists() {
+            let contents = fs::read_to_string(&config_path)?;
+            toml::from_str(&contents)?
+        } else {
+            let config = Self::default_for_platform()?;
+            config.persist(&config_path)?;
+            config
+        };
+
         if let Some(db_path) = env_override_database_path() {
             if let Some(parent) = db_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-
-            return Ok(Self {
-                database_path: db_path,
-            });
+            config.database_path = db_path;
         }
 
-        let config_path = config_file_path()?;
-
-        if config_path.exists() {
-            let contents = fs::read_to_string(&config_path)?;
-            return Ok(toml::from_str(&contents)?);
-        }
-
-        let config = Self::default_for_platform()?;
-        config.persist(&config_path)?;
         Ok(config)
     }
 
@@ -56,6 +120,7 @@ impl BlipConfig {
 
         Ok(Self {
             database_path: data_dir.join("blipcoard.db"),
+            capture: CaptureConfig::default(),
         })
     }
 
@@ -111,4 +176,72 @@ fn env_override_socket_path() -> Option<PathBuf> {
 
 fn project_dirs() -> Result<ProjectDirs, ConfigError> {
     ProjectDirs::from("com", "acozy03", "blipcoard").ok_or(ConfigError::MissingProjectDirs)
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+const fn default_max_image_bytes() -> usize {
+    50 * 1024 * 1024
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_config_defaults_capture_policy() {
+        let config: BlipConfig =
+            toml::from_str("database_path = '/tmp/blipcoard.db'\n").expect("config should parse");
+
+        assert!(config.capture.enabled);
+        assert!(config.capture.image_enabled());
+        assert!(config.capture.file_list_enabled());
+        assert!(config.capture.html_enabled());
+        assert!(config.capture.rtf_enabled());
+        assert!(config.capture.unknown_enabled());
+        assert!(config.capture.image_previews);
+    }
+
+    #[test]
+    fn capture_global_disable_overrides_payload_flags() {
+        let config: BlipConfig = toml::from_str(
+            "
+database_path = '/tmp/blipcoard.db'
+
+[capture]
+enabled = false
+image = true
+",
+        )
+        .expect("config should parse");
+
+        assert!(!config.capture.image_enabled());
+    }
+
+    #[test]
+    fn database_path_override_preserves_file_capture_policy() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("blipcoard-config-test-{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should create");
+        let config_path = temp_dir.join("config.toml");
+        std::fs::write(
+            &config_path,
+            "
+database_path = '/tmp/original.db'
+
+[capture]
+enabled = false
+",
+        )
+        .expect("config should write");
+
+        let config: BlipConfig =
+            toml::from_str(&std::fs::read_to_string(config_path).expect("config should read"))
+                .expect("config should parse");
+
+        assert!(!config.capture.enabled);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
 }

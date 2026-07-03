@@ -75,6 +75,10 @@ export type WorkspaceSummary = {
   name: string;
   agent_access: boolean;
   sticky_capture: boolean;
+  rich_capture_enabled: boolean;
+  image_capture_enabled: boolean;
+  rich_payload_visibility: string;
+  agent_raw_payload_access: boolean;
 };
 
 export type CurrentWorkspaceResponse = {
@@ -111,9 +115,33 @@ declare global {
 }
 
 const DEV_WORKSPACES: WorkspaceSummary[] = [
-  { name: "inbox", agent_access: false, sticky_capture: false },
-  { name: "auth-bug", agent_access: false, sticky_capture: false },
-  { name: "agent-feed", agent_access: true, sticky_capture: false }
+  {
+    name: "inbox",
+    agent_access: false,
+    sticky_capture: false,
+    rich_capture_enabled: true,
+    image_capture_enabled: true,
+    rich_payload_visibility: "safe_preview",
+    agent_raw_payload_access: false
+  },
+  {
+    name: "auth-bug",
+    agent_access: false,
+    sticky_capture: false,
+    rich_capture_enabled: true,
+    image_capture_enabled: true,
+    rich_payload_visibility: "safe_preview",
+    agent_raw_payload_access: false
+  },
+  {
+    name: "agent-feed",
+    agent_access: true,
+    sticky_capture: false,
+    rich_capture_enabled: true,
+    image_capture_enabled: true,
+    rich_payload_visibility: "safe_preview",
+    agent_raw_payload_access: false
+  }
 ];
 
 const DEV_BLIPS: Record<string, BlipSummary[]> = {

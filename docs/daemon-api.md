@@ -108,13 +108,30 @@ Missing backing blobs are represented as `preview_state = "missing_blob"`;
 redacted blips use `preview_state = "redacted"` and omit sensitive metadata.
 HTML and RTF summaries expose plain text fallback only.
 
+Workspace summaries include the active rich payload policy fields:
+
+- `rich_capture_enabled`
+- `image_capture_enabled`
+- `rich_payload_visibility`
+- `agent_raw_payload_access`
+
+`rich_payload_visibility = "hidden"` suppresses typed payload summaries from
+daemon list/detail responses for that workspace. Ordinary list/detail calls do
+not emit payload preview/export/read audit events because they do not dereference
+blob bytes.
+
+Workspace policy changes use the daemon-mediated `set_workspace_policy` command,
+which records a `workspace_policy_changed` audit event and returns the updated
+workspace summary.
+
 Agent-facing reads are scoped by workspace. The current agent read command,
 `blip agent recent <workspace>`, is daemon-mediated and returns full blip
 content only when that workspace has `agent_access` enabled. The default `inbox`
 workspace is created with `agent_access = false`, so `blip agent recent inbox`
 returns an `access_denied` daemon error unless a future explicit policy change
-grants broader access. Human-facing inbox commands remain separate from agent
-read commands.
+grants broader access. Raw binary payload reads require a separate workspace
+policy allow flag and are denied by default even when text agent access is
+enabled. Human-facing inbox commands remain separate from agent read commands.
 
 The daemon should attach the client kind to policy and audit decisions where it
 matters. Expected client kinds are:

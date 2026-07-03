@@ -44,6 +44,7 @@ pub enum DaemonCommand {
     CurrentWorkspace,
     ActivateWorkspace,
     SetStickyCapture,
+    SetWorkspacePolicy,
     ListWorkspaces,
     ListBlips,
     SearchBlips,
@@ -64,6 +65,7 @@ impl DaemonCommand {
             Self::CurrentWorkspace => "current_workspace",
             Self::ActivateWorkspace => "activate_workspace",
             Self::SetStickyCapture => "set_sticky_capture",
+            Self::SetWorkspacePolicy => "set_workspace_policy",
             Self::ListWorkspaces => "list_workspaces",
             Self::ListBlips => "list_blips",
             Self::SearchBlips => "search_blips",
@@ -90,6 +92,13 @@ pub enum DaemonRequestPayload {
     SetStickyCapture {
         workspace: String,
         enabled: bool,
+    },
+    SetWorkspacePolicy {
+        workspace: String,
+        rich_capture_enabled: bool,
+        image_capture_enabled: bool,
+        rich_payload_visibility: String,
+        agent_raw_payload_access: bool,
     },
     ListWorkspaces,
     ListBlips {
@@ -186,6 +195,7 @@ pub enum DaemonResponsePayload {
     CurrentWorkspace(CurrentWorkspaceResponse),
     WorkspaceActivated(CurrentWorkspaceResponse),
     StickyCaptureSet(WorkspaceSummary),
+    WorkspacePolicySet(WorkspaceSummary),
     Workspaces(WorkspaceListResponse),
     Blips(BlipListResponse),
     Blip(BlipDetail),
@@ -216,6 +226,14 @@ pub struct WorkspaceSummary {
     pub name: String,
     pub agent_access: bool,
     pub sticky_capture: bool,
+    #[serde(default = "default_true")]
+    pub rich_capture_enabled: bool,
+    #[serde(default = "default_true")]
+    pub image_capture_enabled: bool,
+    #[serde(default = "default_rich_payload_visibility")]
+    pub rich_payload_visibility: String,
+    #[serde(default)]
+    pub agent_raw_payload_access: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,6 +368,14 @@ pub enum DaemonApiErrorCode {
     AccessDenied,
     StoreUnavailable,
     Internal,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+fn default_rich_payload_visibility() -> String {
+    "safe_preview".to_owned()
 }
 
 #[cfg(test)]
@@ -487,6 +513,45 @@ mod tests {
 
         let decoded =
             serde_json::from_value::<DaemonRequest>(value).expect("activate request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn set_workspace_policy_request_json_shape_round_trips() {
+        let request = DaemonRequest::new(
+            "request-policy",
+            DaemonCommand::SetWorkspacePolicy,
+            DaemonRequestPayload::SetWorkspacePolicy {
+                workspace: "auth-bug".to_owned(),
+                rich_capture_enabled: true,
+                image_capture_enabled: false,
+                rich_payload_visibility: "metadata".to_owned(),
+                agent_raw_payload_access: false,
+            },
+        );
+
+        let value = serde_json::to_value(&request).expect("policy request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-policy",
+                "command": "set_workspace_policy",
+                "payload": {
+                    "set_workspace_policy": {
+                        "workspace": "auth-bug",
+                        "rich_capture_enabled": true,
+                        "image_capture_enabled": false,
+                        "rich_payload_visibility": "metadata",
+                        "agent_raw_payload_access": false,
+                    }
+                },
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<DaemonRequest>(value).expect("policy request should decode");
         assert_eq!(decoded, request);
     }
 

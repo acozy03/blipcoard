@@ -3,7 +3,7 @@ use blip_api::{
     BlipListResponse, BlipRoutedResponse, CurrentWorkspaceResponse, DAEMON_API_VERSION,
     DaemonApiError, DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse,
     DaemonResponsePayload, DaemonResponseStatus, DaemonVersionResponse, HealthResponse,
-    WorkspaceListResponse,
+    WorkspaceListResponse, WorkspaceSummary,
 };
 use blip_config::{BlipConfig, ConfigError};
 use std::error::Error;
@@ -106,6 +106,35 @@ impl DaemonClient {
             Some(DaemonResponsePayload::Workspaces(workspaces)) => Ok(workspaces),
             other => Err(DaemonClientError::UnexpectedPayload {
                 command: DaemonCommand::ListWorkspaces,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn set_workspace_policy(
+        &self,
+        workspace: &str,
+        rich_capture_enabled: bool,
+        image_capture_enabled: bool,
+        rich_payload_visibility: &str,
+        agent_raw_payload_access: bool,
+    ) -> Result<WorkspaceSummary, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("set-workspace-policy"),
+            DaemonCommand::SetWorkspacePolicy,
+            DaemonRequestPayload::SetWorkspacePolicy {
+                workspace: workspace.to_owned(),
+                rich_capture_enabled,
+                image_capture_enabled,
+                rich_payload_visibility: rich_payload_visibility.to_owned(),
+                agent_raw_payload_access,
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::WorkspacePolicySet(workspace)) => Ok(workspace),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::SetWorkspacePolicy,
                 payload: payload_name(other.as_ref()),
             }),
         }
@@ -432,6 +461,7 @@ fn payload_name(payload: Option<&DaemonResponsePayload>) -> &'static str {
         Some(DaemonResponsePayload::CurrentWorkspace(_)) => "current_workspace",
         Some(DaemonResponsePayload::WorkspaceActivated(_)) => "workspace_activated",
         Some(DaemonResponsePayload::StickyCaptureSet(_)) => "sticky_capture_set",
+        Some(DaemonResponsePayload::WorkspacePolicySet(_)) => "workspace_policy_set",
         Some(DaemonResponsePayload::Workspaces(_)) => "workspaces",
         Some(DaemonResponsePayload::Blips(_)) => "blips",
         Some(DaemonResponsePayload::Blip(_)) => "blip",
