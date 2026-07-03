@@ -551,6 +551,37 @@ button {
   background: #fff7f7;
 }
 
+.image-preview-panel {
+  min-height: 180px;
+  max-height: 520px;
+  display: grid;
+  gap: 8px;
+  align-items: start;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #d9dfd6;
+  border-radius: 6px;
+  background: #f8faf5;
+}
+
+.image-preview-panel img {
+  display: block;
+  width: auto;
+  max-width: none;
+  height: auto;
+  max-height: none;
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.image-preview-panel p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #526057;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .metadata-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
