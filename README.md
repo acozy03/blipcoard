@@ -20,6 +20,8 @@ CLI-only install and operations guidance lives in
 [docs/cli-operations.md](./docs/cli-operations.md).
 Upgrade and migration guidance lives in
 [docs/upgrade-migrations.md](./docs/upgrade-migrations.md).
+Documentation site architecture lives in
+[docs/docs-site-architecture.md](./docs/docs-site-architecture.md).
 
 ## Current Status
 
