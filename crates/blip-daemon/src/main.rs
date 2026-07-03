@@ -20,11 +20,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let clipboard_config = clipboard_config_from_capture(&config.capture);
     let idle_interval = clipboard_config.poll_interval;
     let watcher = system_watcher(clipboard_config)?;
-    let mut runtime = DaemonRuntime::with_capture_config(
+    let mut runtime = DaemonRuntime::with_config(
         &config.database_path,
         store,
         ClipboardIngestionSource::new(watcher, idle_interval),
-        config.capture.clone(),
+        &config,
     );
     let response = runtime.health_response()?;
 
@@ -36,14 +36,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn start_ipc_server(config: &BlipConfig) -> Result<(), Box<dyn std::error::Error>> {
     let database_path = config.database_path.clone();
-    let capture = config.capture.clone();
     let socket_path = config.daemon_socket_path()?;
     let store = BlipStore::open(&database_path)?;
-    let mut runtime = DaemonRuntime::with_capture_config(
+    let mut runtime = DaemonRuntime::with_config(
         &database_path,
         store,
         PendingIngestionSource::default(),
-        capture,
+        config,
     );
     let ipc_server = DaemonIpcServer::new(&socket_path).bind()?;
 
@@ -59,11 +58,11 @@ fn start_ipc_server(config: &BlipConfig) -> Result<(), Box<dyn std::error::Error
 fn serve_ipc(config: &BlipConfig) -> Result<(), Box<dyn std::error::Error>> {
     let socket_path = config.daemon_socket_path()?;
     let store = BlipStore::open(&config.database_path)?;
-    let mut runtime = DaemonRuntime::with_capture_config(
+    let mut runtime = DaemonRuntime::with_config(
         &config.database_path,
         store,
         PendingIngestionSource::default(),
-        config.capture.clone(),
+        config,
     );
 
     eprintln!("serving daemon IPC on {}", socket_path.display());

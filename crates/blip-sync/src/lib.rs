@@ -1,5 +1,7 @@
 use chrono::{DateTime, Duration, Utc};
+use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
@@ -278,6 +280,277 @@ pub struct HostedAuditEvent {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiEnvelope<T> {
+    pub request_id: String,
+    pub status: String,
+    pub data: Option<T>,
+    pub error: Option<ApiError>,
+}
+
+impl<T> ApiEnvelope<T> {
+    pub fn ok(request_id: impl Into<String>, data: T) -> Self {
+        Self {
+            request_id: request_id.into(),
+            status: "ok".to_string(),
+            data: Some(data),
+            error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiError {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HealthResponse {
+    pub service: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateWorkspaceRequest {
+    pub name: String,
+    pub owner_display_name: Option<String>,
+    pub retention_days: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateWorkspaceResponse {
+    pub workspace: HostedWorkspaceSummary,
+    pub member: MemberSummary,
+    pub event: WorkspaceEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostedWorkspaceSummary {
+    pub id: String,
+    pub name: String,
+    pub created_by_member_id: String,
+    pub created_at: DateTime<Utc>,
+    pub retention_days: Option<i64>,
+    pub default_role: HostedRole,
+    pub last_sequence: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberSummary {
+    pub id: String,
+    pub workspace_id: String,
+    pub display_name: String,
+    pub role: HostedRole,
+    pub status: String,
+    pub joined_at: DateTime<Utc>,
+}
+
+impl From<HostedMember> for MemberSummary {
+    fn from(member: HostedMember) -> Self {
+        Self {
+            id: member.id,
+            workspace_id: member.workspace_id,
+            display_name: member.display_name,
+            role: member.role,
+            status: "active".to_string(),
+            joined_at: member.joined_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateJoinCodeRequest {
+    pub created_by_member_id: String,
+    pub role: HostedRole,
+    pub expires_in_seconds: Option<i64>,
+    pub max_uses: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateJoinCodeResponse {
+    pub join_code: JoinCodeSummary,
+    pub raw_code: String,
+    pub event: WorkspaceEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JoinCodeSummary {
+    pub id: String,
+    pub workspace_id: String,
+    pub role: HostedRole,
+    pub expires_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub max_uses: u32,
+    pub use_count: u32,
+}
+
+impl From<HostedJoinCode> for JoinCodeSummary {
+    fn from(join_code: HostedJoinCode) -> Self {
+        Self {
+            id: join_code.id,
+            workspace_id: join_code.workspace_id,
+            role: join_code.role,
+            expires_at: join_code.expires_at,
+            revoked_at: join_code.revoked_at,
+            max_uses: join_code.max_uses,
+            use_count: join_code.use_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JoinWorkspaceRequest {
+    pub code: String,
+    pub display_name: String,
+    pub device_label: Option<String>,
+    pub client_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JoinWorkspaceResponse {
+    pub workspace: HostedWorkspaceSummary,
+    pub member: MemberSummary,
+    pub event: WorkspaceEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishBlipRequest {
+    pub publisher_member_id: String,
+    pub local_blip_id: String,
+    pub content_type: String,
+    pub content: String,
+    pub preview: String,
+    pub size_bytes: i64,
+    pub is_redacted: bool,
+    pub tags: Vec<String>,
+    pub captured_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishBlipResponse {
+    pub blip: HostedBlipSummary,
+    pub event: WorkspaceEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostedBlipSummary {
+    pub id: String,
+    pub workspace_id: String,
+    pub local_blip_id: String,
+    pub publisher_member_id: String,
+    pub content_type: String,
+    pub content: String,
+    pub preview: String,
+    pub size_bytes: i64,
+    pub is_redacted: bool,
+    pub tags: Vec<String>,
+    pub captured_at: Option<DateTime<Utc>>,
+    pub published_at: DateTime<Utc>,
+    pub sequence: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceEvent {
+    pub id: String,
+    pub workspace_id: String,
+    pub sequence: i64,
+    pub event_type: String,
+    pub actor_member_id: Option<String>,
+    pub target_id: Option<String>,
+    pub data: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventQuery {
+    #[serde(default)]
+    pub after_sequence: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct HostedClient {
+    base_url: String,
+    http: Client,
+}
+
+impl HostedClient {
+    pub fn new(base_url: impl Into<String>) -> Result<Self, HostedClientError> {
+        let base_url = normalize_base_url(base_url.into())?;
+        Ok(Self {
+            base_url,
+            http: Client::new(),
+        })
+    }
+
+    pub fn join_workspace(
+        &self,
+        request: &JoinWorkspaceRequest,
+    ) -> Result<JoinWorkspaceResponse, HostedClientError> {
+        self.post("/v1/join", request)
+    }
+
+    pub fn create_workspace(
+        &self,
+        request: &CreateWorkspaceRequest,
+    ) -> Result<CreateWorkspaceResponse, HostedClientError> {
+        self.post("/v1/workspaces", request)
+    }
+
+    pub fn create_join_code(
+        &self,
+        workspace_id: &str,
+        request: &CreateJoinCodeRequest,
+    ) -> Result<CreateJoinCodeResponse, HostedClientError> {
+        self.post(
+            &format!("/v1/workspaces/{workspace_id}/join-codes"),
+            request,
+        )
+    }
+
+    pub fn publish_blip(
+        &self,
+        workspace_id: &str,
+        request: &PublishBlipRequest,
+    ) -> Result<PublishBlipResponse, HostedClientError> {
+        self.post(&format!("/v1/workspaces/{workspace_id}/blips"), request)
+    }
+
+    fn post<T, R>(&self, path: &str, request: &T) -> Result<R, HostedClientError>
+    where
+        T: Serialize + ?Sized,
+        R: for<'de> Deserialize<'de>,
+    {
+        let response = self
+            .http
+            .post(format!("{}{}", self.base_url, path))
+            .json(request)
+            .send()?;
+        let status = response.status();
+        let envelope = response.json::<ApiEnvelope<R>>()?;
+        if !status.is_success() || envelope.status != "ok" {
+            let error = envelope.error.unwrap_or(ApiError {
+                code: status.as_u16().to_string(),
+                message: format!("hosted service returned HTTP {status}"),
+            });
+            return Err(HostedClientError::Api(error));
+        }
+        envelope.data.ok_or(HostedClientError::MissingData)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum HostedClientError {
+    #[error("hosted service URL must start with http:// or https://")]
+    InvalidBaseUrl,
+    #[error("hosted HTTP error: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("hosted API error {code}: {message}", code = .0.code, message = .0.message)]
+    Api(ApiError),
+    #[error("hosted API returned success without data")]
+    MissingData,
+}
+
 impl HostedAuditEvent {
     pub fn new(
         workspace_id: impl Into<String>,
@@ -343,6 +616,15 @@ fn generate_join_code() -> String {
 
 fn hosted_id(prefix: &str) -> String {
     format!("{prefix}_{}", Uuid::new_v4().simple())
+}
+
+fn normalize_base_url(value: String) -> Result<String, HostedClientError> {
+    let trimmed = value.trim().trim_end_matches('/').to_owned();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        Ok(trimmed)
+    } else {
+        Err(HostedClientError::InvalidBaseUrl)
+    }
 }
 
 #[cfg(test)]
@@ -555,5 +837,17 @@ mod tests {
         assert!(HostedRole::Viewer.can_read_blips());
         assert!(!HostedRole::Viewer.can_publish_blips());
         assert!(!HostedRole::Editor.can_create_join_codes());
+    }
+
+    #[test]
+    fn hosted_client_normalizes_base_url() {
+        assert_eq!(
+            normalize_base_url(" http://127.0.0.1:8732/ ".to_string()).expect("valid base URL"),
+            "http://127.0.0.1:8732"
+        );
+        assert!(matches!(
+            normalize_base_url("127.0.0.1:8732".to_string()),
+            Err(HostedClientError::InvalidBaseUrl)
+        ));
     }
 }

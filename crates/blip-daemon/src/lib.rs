@@ -11,19 +11,21 @@ use blip_api::{
     AuditEventSummary, BlipDetail, BlipListResponse, BlipRoutedResponse, BlipSummary,
     CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode,
     DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
-    DaemonVersionResponse, HealthResponse, PayloadBytesResponse, PayloadPreviewState,
-    PayloadRequester, PayloadSummary, WorkspaceListResponse, WorkspaceSummary,
+    DaemonVersionResponse, HealthResponse, HostedPublishResponse, HostedStatusResponse,
+    PayloadBytesResponse, PayloadPreviewState, PayloadRequester, PayloadSummary,
+    WorkspaceListResponse, WorkspaceSummary,
 };
 use blip_clipboard::{
     ClipboardError, ClipboardFileList, ClipboardImage, ClipboardPayload, ClipboardRichText,
     ClipboardUnknown, ClipboardWatcher,
 };
-use blip_config::CaptureConfig;
+use blip_config::{BlipConfig, CaptureConfig, HostedConfig, config_file_path};
 use blip_core::{ActorType, AuditEvent, AuditEventType, Blip, PayloadAccessAudit};
 use blip_core::{
     BlipError, BlipStore, ContentType, LocalBlobStore, NewBlip, NewClipboardMetadataPayload,
     NewClipboardPayload, PayloadKind, RichPayloadVisibility, WorkspacePolicy,
 };
+use blip_sync::{HostedClient, HostedRole, JoinWorkspaceRequest, PublishBlipRequest};
 use chrono::Utc;
 use image::GenericImageView;
 use std::path::{Path, PathBuf};
@@ -46,6 +48,8 @@ pub struct DaemonRuntime<S> {
     source: S,
     duplicate_suppression: DuplicateSuppression,
     capture: CaptureConfig,
+    hosted: HostedConfig,
+    config_path: Option<PathBuf>,
 }
 
 impl<S> DaemonRuntime<S>
@@ -59,6 +63,8 @@ where
             source,
             duplicate_suppression: DuplicateSuppression::new(DUPLICATE_SUPPRESSION_WINDOW),
             capture: CaptureConfig::default(),
+            hosted: HostedConfig::default(),
+            config_path: None,
         }
     }
 
@@ -74,6 +80,8 @@ where
             source,
             duplicate_suppression: DuplicateSuppression::new(duplicate_suppression_window),
             capture: CaptureConfig::default(),
+            hosted: HostedConfig::default(),
+            config_path: None,
         }
     }
 
@@ -89,6 +97,25 @@ where
             source,
             duplicate_suppression: DuplicateSuppression::new(DUPLICATE_SUPPRESSION_WINDOW),
             capture,
+            hosted: HostedConfig::default(),
+            config_path: None,
+        }
+    }
+
+    pub fn with_config(
+        database_path: impl AsRef<Path>,
+        store: BlipStore,
+        source: S,
+        config: &BlipConfig,
+    ) -> Self {
+        Self {
+            database_path: database_path.as_ref().to_owned(),
+            store,
+            source,
+            duplicate_suppression: DuplicateSuppression::new(DUPLICATE_SUPPRESSION_WINDOW),
+            capture: config.capture.clone(),
+            hosted: config.hosted.clone(),
+            config_path: config_file_path().ok(),
         }
     }
 
@@ -575,6 +602,54 @@ where
                     Err(error) => route_error_response(request_id, command, error),
                 }
             }
+            (DaemonCommand::HostedStatus, DaemonRequestPayload::HostedStatus) => {
+                DaemonResponse::ok(
+                    request_id,
+                    command,
+                    DaemonResponsePayload::HostedStatus(self.hosted_status_response()),
+                )
+            }
+            (
+                DaemonCommand::HostedJoinWorkspace,
+                DaemonRequestPayload::HostedJoinWorkspace {
+                    service_url,
+                    join_code,
+                    display_name,
+                    device_label,
+                },
+            ) => {
+                match self.join_hosted_workspace(service_url, join_code, display_name, device_label)
+                {
+                    Ok(status) => DaemonResponse::ok(
+                        request_id,
+                        command,
+                        DaemonResponsePayload::HostedWorkspaceJoined(status),
+                    ),
+                    Err(error) => hosted_error_response(request_id, command, error),
+                }
+            }
+            (
+                DaemonCommand::HostedPublishBlip,
+                DaemonRequestPayload::HostedPublishBlip { blip_id },
+            ) => match self.publish_hosted_blip(&blip_id) {
+                Ok(response) => DaemonResponse::ok(
+                    request_id,
+                    command,
+                    DaemonResponsePayload::HostedBlipPublished(response),
+                ),
+                Err(error) => hosted_error_response(request_id, command, error),
+            },
+            (
+                DaemonCommand::HostedSetStickyShare,
+                DaemonRequestPayload::HostedSetStickyShare { enabled },
+            ) => match self.set_hosted_sticky_share(enabled) {
+                Ok(status) => DaemonResponse::ok(
+                    request_id,
+                    command,
+                    DaemonResponsePayload::HostedStickyShareSet(status),
+                ),
+                Err(error) => hosted_error_response(request_id, command, error),
+            },
             _ => DaemonResponse::error(
                 request_id,
                 command,
@@ -1169,6 +1244,156 @@ where
             .map_err(PayloadAccessError::Store)
     }
 
+    fn hosted_status_response(&self) -> HostedStatusResponse {
+        HostedStatusResponse {
+            connected: self.hosted.service_url.is_some()
+                && self.hosted.workspace_id.is_some()
+                && self.hosted.member_id.is_some(),
+            service_url: self.hosted.service_url.clone(),
+            workspace_id: self.hosted.workspace_id.clone(),
+            workspace_name: self.hosted.workspace_name.clone(),
+            member_id: self.hosted.member_id.clone(),
+            member_display_name: self.hosted.member_display_name.clone(),
+            member_role: self.hosted.member_role.clone(),
+            sticky_share_enabled: self.hosted.sticky_share_enabled,
+        }
+    }
+
+    fn join_hosted_workspace(
+        &mut self,
+        service_url: String,
+        join_code: String,
+        display_name: String,
+        device_label: Option<String>,
+    ) -> Result<HostedStatusResponse, HostedOperationError> {
+        if display_name.trim().is_empty() {
+            return Err(HostedOperationError::InvalidRequest(
+                "display name is required".to_owned(),
+            ));
+        }
+        let client = HostedClient::new(service_url.clone())?;
+        let joined = client.join_workspace(&JoinWorkspaceRequest {
+            code: join_code,
+            display_name,
+            device_label,
+            client_kind: Some("blipd".to_owned()),
+        })?;
+        self.hosted.service_url = Some(service_url.trim().trim_end_matches('/').to_owned());
+        self.hosted.workspace_id = Some(joined.workspace.id.clone());
+        self.hosted.workspace_name = Some(joined.workspace.name.clone());
+        self.hosted.member_id = Some(joined.member.id.clone());
+        self.hosted.member_display_name = Some(joined.member.display_name.clone());
+        self.hosted.member_role = Some(role_name(joined.member.role).to_owned());
+        self.hosted.sticky_share_enabled = false;
+        self.persist_hosted_config()?;
+        self.store.record_hosted_event(
+            AuditEventType::HostedWorkspaceJoined,
+            None,
+            None,
+            serde_json::json!({
+                "service_url": self.hosted.service_url,
+                "hosted_workspace_id": joined.workspace.id,
+                "hosted_workspace_name": joined.workspace.name,
+                "hosted_member_id": joined.member.id,
+                "role": role_name(joined.member.role),
+            }),
+        )?;
+        Ok(self.hosted_status_response())
+    }
+
+    fn publish_hosted_blip(
+        &mut self,
+        blip_id: &str,
+    ) -> Result<HostedPublishResponse, HostedOperationError> {
+        let service_url = self
+            .hosted
+            .service_url
+            .clone()
+            .ok_or(HostedOperationError::NotConnected)?;
+        let hosted_workspace_id = self
+            .hosted
+            .workspace_id
+            .clone()
+            .ok_or(HostedOperationError::NotConnected)?;
+        let publisher_member_id = self
+            .hosted
+            .member_id
+            .clone()
+            .ok_or(HostedOperationError::NotConnected)?;
+        let blip = self
+            .store
+            .get_blip(blip_id)?
+            .ok_or_else(|| BlipError::BlipNotFound(blip_id.to_owned()))?;
+        let client = HostedClient::new(service_url.clone())?;
+        let published = client.publish_blip(
+            &hosted_workspace_id,
+            &PublishBlipRequest {
+                publisher_member_id,
+                local_blip_id: blip.id.clone(),
+                content_type: blip.content_type.as_str().to_owned(),
+                content: blip.content.clone(),
+                preview: blip.content.chars().take(240).collect(),
+                size_bytes: blip.size_bytes,
+                is_redacted: blip.is_redacted,
+                tags: blip.tags.clone(),
+                captured_at: Some(blip.created_at),
+            },
+        )?;
+        let response = HostedPublishResponse {
+            local_blip_id: blip.id.clone(),
+            hosted_blip_id: published.blip.id.clone(),
+            hosted_workspace_id: hosted_workspace_id.clone(),
+            sequence: published.blip.sequence,
+        };
+        self.store.record_hosted_event(
+            AuditEventType::HostedBlipPublished,
+            Some(blip.id),
+            Some(blip.workspace_name),
+            serde_json::json!({
+                "service_url": service_url,
+                "hosted_workspace_id": hosted_workspace_id,
+                "hosted_blip_id": response.hosted_blip_id,
+                "sequence": response.sequence,
+            }),
+        )?;
+        Ok(response)
+    }
+
+    fn set_hosted_sticky_share(
+        &mut self,
+        enabled: bool,
+    ) -> Result<HostedStatusResponse, HostedOperationError> {
+        if enabled && !self.hosted_status_response().connected {
+            return Err(HostedOperationError::NotConnected);
+        }
+        self.hosted.sticky_share_enabled = enabled;
+        self.persist_hosted_config()?;
+        self.store.record_hosted_event(
+            AuditEventType::HostedStickyShareChanged,
+            None,
+            None,
+            serde_json::json!({
+                "enabled": enabled,
+                "hosted_workspace_id": self.hosted.workspace_id,
+                "hosted_workspace_name": self.hosted.workspace_name,
+            }),
+        )?;
+        Ok(self.hosted_status_response())
+    }
+
+    fn persist_hosted_config(&self) -> Result<(), HostedOperationError> {
+        let Some(config_path) = &self.config_path else {
+            return Ok(());
+        };
+        BlipConfig {
+            database_path: self.database_path.clone(),
+            capture: self.capture.clone(),
+            hosted: self.hosted.clone(),
+        }
+        .persist(config_path)?;
+        Ok(())
+    }
+
     fn workspace_summary(
         &self,
         workspace: blip_core::Workspace,
@@ -1177,6 +1402,9 @@ where
             .store
             .get_workspace_policy(&workspace.name)?
             .unwrap_or_else(|| WorkspacePolicy::default_for_workspace(workspace.name.clone()));
+        let active_workspace = self.store.get_active_workspace()?;
+        let hosted_share_enabled = self.hosted.sticky_share_enabled
+            && active_workspace.as_deref() == Some(workspace.name.as_str());
         Ok(WorkspaceSummary {
             name: workspace.name,
             agent_access: workspace.agent_access,
@@ -1185,6 +1413,9 @@ where
             image_capture_enabled: policy.image_capture_enabled,
             rich_payload_visibility: policy.rich_payload_visibility.as_str().to_owned(),
             agent_raw_payload_access: policy.agent_raw_payload_access,
+            hosted_share_enabled,
+            hosted_workspace_id: self.hosted.workspace_id.clone(),
+            hosted_workspace_name: self.hosted.workspace_name.clone(),
         })
     }
 
@@ -1848,6 +2079,52 @@ fn route_error_response(
             command,
             DaemonApiError::new(DaemonApiErrorCode::StoreUnavailable, error.to_string()),
         ),
+    }
+}
+
+fn hosted_error_response(
+    request_id: String,
+    command: DaemonCommand,
+    error: HostedOperationError,
+) -> DaemonResponse {
+    let code = match error {
+        HostedOperationError::InvalidRequest(_) => DaemonApiErrorCode::InvalidRequest,
+        HostedOperationError::NotConnected => DaemonApiErrorCode::InvalidRequest,
+        HostedOperationError::Store(BlipError::BlipNotFound(_)) => DaemonApiErrorCode::NotFound,
+        HostedOperationError::Store(BlipError::WorkspaceNotFound(_)) => {
+            DaemonApiErrorCode::NotFound
+        }
+        HostedOperationError::Store(_) => DaemonApiErrorCode::StoreUnavailable,
+        HostedOperationError::Config(_) | HostedOperationError::HostedClient(_) => {
+            DaemonApiErrorCode::Internal
+        }
+    };
+    DaemonResponse::error(
+        request_id,
+        command,
+        DaemonApiError::new(code, error.to_string()),
+    )
+}
+
+#[derive(Debug, Error)]
+enum HostedOperationError {
+    #[error("{0}")]
+    InvalidRequest(String),
+    #[error("join a hosted workspace before publishing or enabling sticky share")]
+    NotConnected,
+    #[error(transparent)]
+    Config(#[from] blip_config::ConfigError),
+    #[error(transparent)]
+    Store(#[from] BlipError),
+    #[error(transparent)]
+    HostedClient(#[from] blip_sync::HostedClientError),
+}
+
+fn role_name(role: HostedRole) -> &'static str {
+    match role {
+        HostedRole::Owner => "owner",
+        HostedRole::Editor => "editor",
+        HostedRole::Viewer => "viewer",
     }
 }
 

@@ -335,6 +335,9 @@ pub enum AuditEventType {
     PayloadRawExported,
     DesktopPayloadOpened,
     AgentPayloadRead,
+    HostedWorkspaceJoined,
+    HostedBlipPublished,
+    HostedStickyShareChanged,
 }
 
 impl AuditEventType {
@@ -353,6 +356,9 @@ impl AuditEventType {
             Self::PayloadRawExported => "payload_raw_exported",
             Self::DesktopPayloadOpened => "desktop_payload_opened",
             Self::AgentPayloadRead => "agent_payload_read",
+            Self::HostedWorkspaceJoined => "hosted_workspace_joined",
+            Self::HostedBlipPublished => "hosted_blip_published",
+            Self::HostedStickyShareChanged => "hosted_sticky_share_changed",
         }
     }
 
@@ -371,6 +377,9 @@ impl AuditEventType {
             "payload_raw_exported" => Ok(Self::PayloadRawExported),
             "desktop_payload_opened" => Ok(Self::DesktopPayloadOpened),
             "agent_payload_read" => Ok(Self::AgentPayloadRead),
+            "hosted_workspace_joined" => Ok(Self::HostedWorkspaceJoined),
+            "hosted_blip_published" => Ok(Self::HostedBlipPublished),
+            "hosted_sticky_share_changed" => Ok(Self::HostedStickyShareChanged),
             _ => Err(BlipError::InvalidPersistedValue {
                 field: "event_type",
                 value: value.to_owned(),

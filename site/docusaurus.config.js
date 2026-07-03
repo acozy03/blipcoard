@@ -70,7 +70,6 @@ const config = {
         respectPrefersColorScheme: true,
       },
       navbar: {
-        title: 'blipcoard',
         logo: {
           alt: 'blipcoard logo',
           src: 'img/logo.svg',

@@ -94,6 +94,27 @@ export type WorkspaceSummary = {
   image_capture_enabled: boolean;
   rich_payload_visibility: string;
   agent_raw_payload_access: boolean;
+  hosted_share_enabled: boolean;
+  hosted_workspace_id: string | null;
+  hosted_workspace_name: string | null;
+};
+
+export type HostedStatusResponse = {
+  connected: boolean;
+  service_url: string | null;
+  workspace_id: string | null;
+  workspace_name: string | null;
+  member_id: string | null;
+  member_display_name: string | null;
+  member_role: string | null;
+  sticky_share_enabled: boolean;
+};
+
+export type HostedPublishResponse = {
+  local_blip_id: string;
+  hosted_blip_id: string;
+  hosted_workspace_id: string;
+  sequence: number;
 };
 
 export type CurrentWorkspaceResponse = {
@@ -138,7 +159,10 @@ const DEV_WORKSPACES: WorkspaceSummary[] = [
     rich_capture_enabled: true,
     image_capture_enabled: true,
     rich_payload_visibility: "safe_preview",
-    agent_raw_payload_access: false
+    agent_raw_payload_access: false,
+    hosted_share_enabled: false,
+    hosted_workspace_id: null,
+    hosted_workspace_name: null
   },
   {
     name: "auth-bug",
@@ -147,7 +171,10 @@ const DEV_WORKSPACES: WorkspaceSummary[] = [
     rich_capture_enabled: true,
     image_capture_enabled: true,
     rich_payload_visibility: "safe_preview",
-    agent_raw_payload_access: false
+    agent_raw_payload_access: false,
+    hosted_share_enabled: false,
+    hosted_workspace_id: null,
+    hosted_workspace_name: null
   },
   {
     name: "agent-feed",
@@ -156,9 +183,23 @@ const DEV_WORKSPACES: WorkspaceSummary[] = [
     rich_capture_enabled: true,
     image_capture_enabled: true,
     rich_payload_visibility: "safe_preview",
-    agent_raw_payload_access: false
+    agent_raw_payload_access: false,
+    hosted_share_enabled: false,
+    hosted_workspace_id: null,
+    hosted_workspace_name: null
   }
 ];
+
+let devHostedStatus: HostedStatusResponse = {
+  connected: false,
+  service_url: null,
+  workspace_id: null,
+  workspace_name: null,
+  member_id: null,
+  member_display_name: null,
+  member_role: null,
+  sticky_share_enabled: false
+};
 
 const DEV_BLIPS: Record<string, BlipSummary[]> = {
   inbox: [
@@ -587,6 +628,77 @@ export async function routeLatestInboxBlip(workspace: string): Promise<BlipRoute
     from_workspace: "inbox",
     to_workspace: workspace
   };
+}
+
+export async function hostedStatus(): Promise<HostedStatusResponse> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    return invoke<HostedStatusResponse>("hosted_status");
+  }
+
+  await devDelay();
+  return devHostedStatus;
+}
+
+export async function hostedJoinWorkspace(input: {
+  service_url: string;
+  join_code: string;
+  display_name: string;
+  device_label?: string | null;
+}): Promise<HostedStatusResponse> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    return invoke<HostedStatusResponse>("hosted_join_workspace", input);
+  }
+
+  await devDelay();
+  devHostedStatus = {
+    connected: true,
+    service_url: input.service_url,
+    workspace_id: "hw_dev",
+    workspace_name: "dev shared workspace",
+    member_id: "hm_dev",
+    member_display_name: input.display_name,
+    member_role: "editor",
+    sticky_share_enabled: false
+  };
+  return devHostedStatus;
+}
+
+export async function hostedPublishBlip(blipId: string): Promise<HostedPublishResponse> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    return invoke<HostedPublishResponse>("hosted_publish_blip", { blip_id: blipId });
+  }
+
+  await devDelay();
+  if (!devHostedStatus.connected || !devHostedStatus.workspace_id) {
+    throw new Error("join a hosted workspace before publishing");
+  }
+  return {
+    local_blip_id: blipId,
+    hosted_blip_id: `hb_${blipId}`,
+    hosted_workspace_id: devHostedStatus.workspace_id,
+    sequence: Date.now()
+  };
+}
+
+export async function hostedSetStickyShare(enabled: boolean): Promise<HostedStatusResponse> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    return invoke<HostedStatusResponse>("hosted_set_sticky_share", { enabled });
+  }
+
+  await devDelay();
+  if (enabled && !devHostedStatus.connected) {
+    throw new Error("join a hosted workspace before enabling sticky share");
+  }
+  devHostedStatus = { ...devHostedStatus, sticky_share_enabled: enabled };
+  return devHostedStatus;
 }
 
 function getInvoke(): TauriCore["invoke"] | null {
