@@ -78,6 +78,7 @@ machine-local project memory and must stay out of git:
 - close child beads only after their work is implemented or explicitly ruled out,
   and close the coordinator only after the PR is merged or the user-visible goal
   is otherwise complete
+- close subagent sessions after their result is integrated or no longer needed
 
 When using subagents, treat the main agent as orchestrator: delegate focused,
 bounded tasks; require written findings in Beads; review their outputs before
@@ -89,6 +90,12 @@ agent's control.
 Use the `gh` CLI as part of normal task management:
 
 - inspect open issues before starting work with `gh issue list` and `gh issue view`
+- do not push directly to `develop`; use a feature branch and PR for every repo
+  change
+- keep PRs scoped to one bead or one GitHub issue when practical
+- merge only after local checks and required GitHub checks pass
+- after merge, sync local `develop`, close the bead, and continue with the next
+  open issue
 - use the Blipcoard GitHub Project as the planning board:
   `https://github.com/users/acozy03/projects/2`
 - inspect project fields before creating or moving work with
