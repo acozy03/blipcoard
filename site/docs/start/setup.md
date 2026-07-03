@@ -23,10 +23,10 @@ curl -fsSL https://raw.githubusercontent.com/blipcoard/blipcoard/develop/scripts
 ## What The Script Does
 
 1. Clones the repository if you are not already inside a checkout.
-2. Installs root, docs, and desktop npm dependencies.
+2. Installs root, docs, desktop, and hosted web npm dependencies.
 3. Configures repository git hooks.
 4. Builds the Rust workspace.
-5. Builds the Docusaurus docs site.
+5. Builds the Docusaurus docs site and hosted web app.
 6. Installs `blip` and `blipd` into `~/.local/bin`.
 7. Installs and starts the user daemon service on macOS or Linux.
 
@@ -59,6 +59,12 @@ Start the docs site locally:
 
 ```bash npm2yarn title="Start docs"
 npm run docs:start
+```
+
+Start the hosted web app locally:
+
+```bash npm2yarn title="Start hosted web"
+npm run web:dev
 ```
 
 If `blip` is not found, add `~/.local/bin` to your shell path:

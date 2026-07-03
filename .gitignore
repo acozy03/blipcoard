@@ -6,6 +6,7 @@
 *.db-wal
 node_modules/
 /apps/desktop/dist/
+/apps/web/dist/
 
 # Beads / Dolt files (added by bd init)
 .dolt/

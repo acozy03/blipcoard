@@ -140,17 +140,19 @@ CLI support should not require hosted mode for local-only users.
 
 ### Web App
 
-The web app is an optional MVP surface for collaborators who do not have the
-desktop app installed. If it is included in Phase 11, it should live in
-`apps/web`; if implementation pressure is high, it can follow the desktop and
-CLI path.
+The web app is the browser join/view surface for collaborators who do not have
+the desktop app installed. It lives in `apps/web` and talks directly to the
+self-hosted relay URL after a join code is redeemed for a member/device session.
 
 MVP web scope:
 
-- enter or open a join code
-- view hosted blips in real time
+- enter a relay URL, join code, and display name
+- persist a browser member/device session locally
+- view hosted blips with automatic polling for workspace events
 - inspect details and tags according to role
+- update tags as an owner or editor
 - copy/export with audit logging
+- report lightweight member presence
 
 The web app is not a replacement for local capture. Browsers cannot become the
 local clipboard owner for the desktop runtime.
@@ -203,7 +205,7 @@ MVP order:
 1. desktop create/join/publish flow
 2. daemon-mediated hosted publish/sync client
 3. CLI status and explicit publish commands
-4. optional web join/view surface
+4. browser web join/view surface
 
 This order keeps the safest user-facing control first: desktop makes hosted
 state visible while preserving local capture ownership.

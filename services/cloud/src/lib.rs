@@ -1,16 +1,19 @@
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use blip_sync::{
     ApiEnvelope, ApiError, CreateJoinCodeRequest, CreateJoinCodeResponse, CreateWorkspaceRequest,
-    CreateWorkspaceResponse, EventQuery, HealthResponse, HostedBlipSummary, HostedJoinCode,
-    HostedMember, HostedRole, HostedWorkspaceSummary, JoinCodeOptions, JoinCodeSummary,
-    JoinWorkspaceRequest, JoinWorkspaceResponse, MemberSummary, PublishBlipRequest,
-    PublishBlipResponse, RateLimitDecision, WorkspaceEvent,
+    CreateWorkspaceResponse, EventQuery, HealthResponse, HostedBlipSummary, HostedDeviceSession,
+    HostedJoinCode, HostedMember, HostedMemberStatus, HostedRole, HostedWorkspaceSummary,
+    JoinCodeOptions, JoinCodeSummary, JoinWorkspaceRequest, JoinWorkspaceResponse,
+    MemberPresenceSummary, MemberQuery, MemberSummary, PresenceHeartbeatRequest,
+    PresenceHeartbeatResponse, PublishBlipRequest, PublishBlipResponse, RateLimitDecision,
+    RecordAccessEventRequest, RecordAccessEventResponse, UpdateTagsRequest, UpdateTagsResponse,
+    WorkspaceEvent,
 };
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -22,6 +25,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use thiserror::Error;
+use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -63,7 +67,24 @@ pub fn app(store: CloudStore) -> Router {
             "/v1/workspaces/{workspace_id}/blips",
             post(publish_blip).get(list_blips),
         )
+        .route(
+            "/v1/workspaces/{workspace_id}/blips/{blip_id}",
+            get(get_blip),
+        )
+        .route(
+            "/v1/workspaces/{workspace_id}/blips/{blip_id}/tags",
+            post(update_blip_tags),
+        )
+        .route(
+            "/v1/workspaces/{workspace_id}/blips/{blip_id}/access-events",
+            post(record_blip_access_event),
+        )
         .route("/v1/workspaces/{workspace_id}/events", get(list_events))
+        .route(
+            "/v1/workspaces/{workspace_id}/presence",
+            get(list_presence).post(presence_heartbeat),
+        )
+        .layer(CorsLayer::permissive())
         .with_state(store)
 }
 
@@ -152,6 +173,20 @@ impl CloudStore {
                 created_at TEXT NOT NULL,
                 UNIQUE(workspace_id, sequence)
             );
+            CREATE TABLE IF NOT EXISTS presence (
+                member_id TEXT PRIMARY KEY REFERENCES members(id),
+                workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+                last_seen_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS device_sessions (
+                token_hash TEXT PRIMARY KEY,
+                member_id TEXT NOT NULL REFERENCES members(id),
+                workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+                device_label TEXT,
+                client_kind TEXT,
+                created_at TEXT NOT NULL,
+                revoked_at TEXT
+            );
             ",
         )?;
         Ok(())
@@ -193,6 +228,16 @@ impl CloudStore {
             ],
         )?;
         insert_member(&connection, &member)?;
+        let raw_token = hosted_id("hs");
+        let session = HostedDeviceSession {
+            token: raw_token.clone(),
+            member_id: member.id.clone(),
+            workspace_id: workspace_id.clone(),
+            device_label: Some("workspace owner".to_owned()),
+            client_kind: Some("owner".to_owned()),
+            created_at: now,
+        };
+        insert_device_session(&connection, &session, &raw_token)?;
         let event = append_event(
             &connection,
             &workspace_id,
@@ -206,6 +251,7 @@ impl CloudStore {
         Ok(CreateWorkspaceResponse {
             workspace: workspace_by_id(&connection, &workspace_id)?,
             member: MemberSummary::from(member),
+            session,
             event,
         })
     }
@@ -228,8 +274,13 @@ impl CloudStore {
         now: DateTime<Utc>,
     ) -> Result<CreateJoinCodeResponse, CloudError> {
         let connection = self.lock()?;
-        let actor = member_by_id(&connection, &request.created_by_member_id)?;
-        if actor.workspace_id != workspace_id || !actor.role.can_create_join_codes() {
+        let actor = member_for_session(
+            &connection,
+            workspace_id,
+            &request.created_by_member_id,
+            &request.session_token,
+        )?;
+        if !actor.role.can_create_join_codes() {
             return Err(CloudError::AccessDenied);
         }
         let created = HostedJoinCode::create(
@@ -270,7 +321,7 @@ impl CloudStore {
             join_code_by_hash(&connection, &blip_sync::hash_join_code(&request.code))?;
         let redemption = join_code.redeem(
             &request.code,
-            request.display_name,
+            request.display_name.clone(),
             now,
             RateLimitDecision::Allow,
         )?;
@@ -279,6 +330,16 @@ impl CloudStore {
             params![join_code.use_count, join_code.id],
         )?;
         insert_member(&connection, &redemption.member)?;
+        let raw_token = hosted_id("hs");
+        let session = HostedDeviceSession {
+            token: raw_token.clone(),
+            member_id: redemption.member.id.clone(),
+            workspace_id: join_code.workspace_id.clone(),
+            device_label: request.device_label,
+            client_kind: request.client_kind,
+            created_at: now,
+        };
+        insert_device_session(&connection, &session, &raw_token)?;
         let event = append_event(
             &connection,
             &join_code.workspace_id,
@@ -292,6 +353,7 @@ impl CloudStore {
         Ok(JoinWorkspaceResponse {
             workspace: workspace_by_id(&connection, &join_code.workspace_id)?,
             member: MemberSummary::from(redemption.member),
+            session,
             event,
         })
     }
@@ -303,8 +365,13 @@ impl CloudStore {
         now: DateTime<Utc>,
     ) -> Result<PublishBlipResponse, CloudError> {
         let connection = self.lock()?;
-        let actor = member_by_id(&connection, &request.publisher_member_id)?;
-        if actor.workspace_id != workspace_id || !actor.role.can_publish_blips() {
+        let actor = member_for_session(
+            &connection,
+            workspace_id,
+            &request.publisher_member_id,
+            &request.session_token,
+        )?;
+        if !actor.role.can_publish_blips() {
             return Err(CloudError::AccessDenied);
         }
         let blip_id = hosted_id("hb");
@@ -355,8 +422,17 @@ impl CloudStore {
         })
     }
 
-    fn list_blips(&self, workspace_id: &str) -> Result<Vec<HostedBlipSummary>, CloudError> {
+    fn list_blips(
+        &self,
+        workspace_id: &str,
+        member_id: &str,
+        session_token: &str,
+    ) -> Result<Vec<HostedBlipSummary>, CloudError> {
         let connection = self.lock()?;
+        let member = member_for_session(&connection, workspace_id, member_id, session_token)?;
+        if !member.role.can_read_blips() {
+            return Err(CloudError::AccessDenied);
+        }
         let mut statement = connection.prepare(
             "SELECT id, workspace_id, local_blip_id, publisher_member_id, content_type, content, preview, size_bytes, is_redacted, tags_json, captured_at, published_at, sequence
              FROM blips WHERE workspace_id = ?1 ORDER BY sequence ASC",
@@ -366,12 +442,37 @@ impl CloudStore {
             .map_err(CloudError::from)
     }
 
+    fn get_blip(
+        &self,
+        workspace_id: &str,
+        blip_id: &str,
+        member_id: &str,
+        session_token: &str,
+    ) -> Result<HostedBlipSummary, CloudError> {
+        let connection = self.lock()?;
+        let member = member_for_session(&connection, workspace_id, member_id, session_token)?;
+        if !member.role.can_read_blips() {
+            return Err(CloudError::AccessDenied);
+        }
+        let blip = blip_by_id(&connection, blip_id)?;
+        if blip.workspace_id != workspace_id {
+            return Err(CloudError::NotFound);
+        }
+        Ok(blip)
+    }
+
     fn list_events(
         &self,
         workspace_id: &str,
         after_sequence: i64,
+        member_id: &str,
+        session_token: &str,
     ) -> Result<Vec<WorkspaceEvent>, CloudError> {
         let connection = self.lock()?;
+        let member = member_for_session(&connection, workspace_id, member_id, session_token)?;
+        if !member.role.can_read_blips() {
+            return Err(CloudError::AccessDenied);
+        }
         let mut statement = connection.prepare(
             "SELECT id, workspace_id, sequence, event_type, actor_member_id, target_id, data_json, created_at
              FROM events WHERE workspace_id = ?1 AND sequence > ?2 ORDER BY sequence ASC",
@@ -379,6 +480,125 @@ impl CloudStore {
         let rows = statement.query_map(params![workspace_id, after_sequence], event_from_row)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(CloudError::from)
+    }
+
+    fn update_blip_tags(
+        &self,
+        workspace_id: &str,
+        blip_id: &str,
+        request: UpdateTagsRequest,
+        now: DateTime<Utc>,
+    ) -> Result<UpdateTagsResponse, CloudError> {
+        let connection = self.lock()?;
+        let member = member_for_session(
+            &connection,
+            workspace_id,
+            &request.member_id,
+            &request.session_token,
+        )?;
+        if !member.role.can_update_tags() {
+            return Err(CloudError::AccessDenied);
+        }
+        let existing = blip_by_id(&connection, blip_id)?;
+        if existing.workspace_id != workspace_id {
+            return Err(CloudError::NotFound);
+        }
+        let tags_json = serde_json::to_string(&normalized_tags(request.tags))?;
+        connection.execute(
+            "UPDATE blips SET tags_json = ?1 WHERE id = ?2 AND workspace_id = ?3",
+            params![tags_json, blip_id, workspace_id],
+        )?;
+        let event = append_event(
+            &connection,
+            workspace_id,
+            "blip_tags_updated",
+            Some(&member.id),
+            Some(blip_id),
+            json!({"tags": serde_json::from_str::<Value>(&tags_json)?}),
+            now,
+        )?;
+
+        Ok(UpdateTagsResponse {
+            blip: blip_by_id(&connection, blip_id)?,
+            event,
+        })
+    }
+
+    fn record_blip_access_event(
+        &self,
+        workspace_id: &str,
+        blip_id: &str,
+        request: RecordAccessEventRequest,
+        now: DateTime<Utc>,
+    ) -> Result<RecordAccessEventResponse, CloudError> {
+        let connection = self.lock()?;
+        let member = member_for_session(
+            &connection,
+            workspace_id,
+            &request.member_id,
+            &request.session_token,
+        )?;
+        if !member.role.can_read_blips() {
+            return Err(CloudError::AccessDenied);
+        }
+        let blip = blip_by_id(&connection, blip_id)?;
+        if blip.workspace_id != workspace_id {
+            return Err(CloudError::NotFound);
+        }
+        let event = append_event(
+            &connection,
+            workspace_id,
+            request.action.event_type(),
+            Some(&member.id),
+            Some(blip_id),
+            json!({}),
+            now,
+        )?;
+
+        Ok(RecordAccessEventResponse { event })
+    }
+
+    fn presence_heartbeat(
+        &self,
+        workspace_id: &str,
+        request: PresenceHeartbeatRequest,
+        now: DateTime<Utc>,
+    ) -> Result<PresenceHeartbeatResponse, CloudError> {
+        let connection = self.lock()?;
+        let member = member_for_session(
+            &connection,
+            workspace_id,
+            &request.member_id,
+            &request.session_token,
+        )?;
+        if !member.role.can_read_blips() {
+            return Err(CloudError::AccessDenied);
+        }
+        connection.execute(
+            "INSERT INTO presence (member_id, workspace_id, last_seen_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(member_id) DO UPDATE SET last_seen_at = excluded.last_seen_at",
+            params![member.id, workspace_id, now.to_rfc3339()],
+        )?;
+        Ok(PresenceHeartbeatResponse {
+            members: list_presence_from(&connection, workspace_id)?,
+        })
+    }
+
+    fn list_presence(
+        &self,
+        workspace_id: &str,
+        member_id: &str,
+        session_token: &str,
+    ) -> Result<PresenceHeartbeatResponse, CloudError> {
+        let connection = self.lock()?;
+        let member = member_for_session(&connection, workspace_id, member_id, session_token)?;
+        if !member.role.can_read_blips() {
+            return Err(CloudError::AccessDenied);
+        }
+        Ok(PresenceHeartbeatResponse {
+            members: list_presence_from(&connection, workspace_id)?,
+        })
     }
 }
 
@@ -446,22 +666,116 @@ async fn publish_blip(
 async fn list_blips(
     State(store): State<CloudStore>,
     Path(workspace_id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<ApiEnvelope<Vec<HostedBlipSummary>>>, CloudError> {
+    let query = member_query_from_headers(&headers)?;
     Ok(Json(ApiEnvelope::ok(
         request_id(),
-        store.list_blips(&workspace_id)?,
+        store.list_blips(&workspace_id, &query.member_id, &query.session_token)?,
+    )))
+}
+
+async fn get_blip(
+    State(store): State<CloudStore>,
+    Path((workspace_id, blip_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<ApiEnvelope<HostedBlipSummary>>, CloudError> {
+    let query = member_query_from_headers(&headers)?;
+    Ok(Json(ApiEnvelope::ok(
+        request_id(),
+        store.get_blip(
+            &workspace_id,
+            &blip_id,
+            &query.member_id,
+            &query.session_token,
+        )?,
     )))
 }
 
 async fn list_events(
     State(store): State<CloudStore>,
     Path(workspace_id): Path<String>,
+    headers: HeaderMap,
     Query(query): Query<EventQuery>,
 ) -> Result<Json<ApiEnvelope<Vec<WorkspaceEvent>>>, CloudError> {
+    let credential = member_query_from_headers(&headers)?;
     Ok(Json(ApiEnvelope::ok(
         request_id(),
-        store.list_events(&workspace_id, query.after_sequence)?,
+        store.list_events(
+            &workspace_id,
+            query.after_sequence,
+            &credential.member_id,
+            &credential.session_token,
+        )?,
     )))
+}
+
+async fn update_blip_tags(
+    State(store): State<CloudStore>,
+    Path((workspace_id, blip_id)): Path<(String, String)>,
+    Json(request): Json<UpdateTagsRequest>,
+) -> Result<Json<ApiEnvelope<UpdateTagsResponse>>, CloudError> {
+    Ok(Json(ApiEnvelope::ok(
+        request_id(),
+        store.update_blip_tags(&workspace_id, &blip_id, request, Utc::now())?,
+    )))
+}
+
+async fn record_blip_access_event(
+    State(store): State<CloudStore>,
+    Path((workspace_id, blip_id)): Path<(String, String)>,
+    Json(request): Json<RecordAccessEventRequest>,
+) -> Result<Json<ApiEnvelope<RecordAccessEventResponse>>, CloudError> {
+    Ok(Json(ApiEnvelope::ok(
+        request_id(),
+        store.record_blip_access_event(&workspace_id, &blip_id, request, Utc::now())?,
+    )))
+}
+
+async fn presence_heartbeat(
+    State(store): State<CloudStore>,
+    Path(workspace_id): Path<String>,
+    Json(request): Json<PresenceHeartbeatRequest>,
+) -> Result<Json<ApiEnvelope<PresenceHeartbeatResponse>>, CloudError> {
+    Ok(Json(ApiEnvelope::ok(
+        request_id(),
+        store.presence_heartbeat(&workspace_id, request, Utc::now())?,
+    )))
+}
+
+async fn list_presence(
+    State(store): State<CloudStore>,
+    Path(workspace_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<ApiEnvelope<PresenceHeartbeatResponse>>, CloudError> {
+    let query = member_query_from_headers(&headers)?;
+    Ok(Json(ApiEnvelope::ok(
+        request_id(),
+        store.list_presence(&workspace_id, &query.member_id, &query.session_token)?,
+    )))
+}
+
+fn member_query_from_headers(headers: &HeaderMap) -> Result<MemberQuery, CloudError> {
+    let member_id = headers
+        .get("x-blip-member-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(CloudError::AccessDenied)?
+        .to_owned();
+    let authorization = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .ok_or(CloudError::AccessDenied)?;
+    let session_token = authorization
+        .strip_prefix("Bearer ")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(CloudError::AccessDenied)?
+        .to_owned();
+
+    Ok(MemberQuery {
+        member_id,
+        session_token,
+    })
 }
 
 #[derive(Debug, Error)]
@@ -576,6 +890,27 @@ fn insert_join_code(connection: &Connection, join_code: &HostedJoinCode) -> Resu
     Ok(())
 }
 
+fn insert_device_session(
+    connection: &Connection,
+    session: &HostedDeviceSession,
+    raw_token: &str,
+) -> Result<(), CloudError> {
+    connection.execute(
+        "INSERT INTO device_sessions
+         (token_hash, member_id, workspace_id, device_label, client_kind, created_at, revoked_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
+        params![
+            blip_sync::hash_join_code(raw_token),
+            session.member_id,
+            session.workspace_id,
+            session.device_label,
+            session.client_kind,
+            session.created_at.to_rfc3339(),
+        ],
+    )?;
+    Ok(())
+}
+
 fn workspace_by_id(
     connection: &Connection,
     workspace_id: &str,
@@ -589,6 +924,38 @@ fn workspace_by_id(
         )
         .optional()?
         .ok_or(CloudError::NotFound)
+}
+
+fn member_for_session(
+    connection: &Connection,
+    workspace_id: &str,
+    member_id: &str,
+    session_token: &str,
+) -> Result<HostedMember, CloudError> {
+    let member = member_by_id(connection, member_id)?;
+    if member.workspace_id != workspace_id {
+        return Err(CloudError::AccessDenied);
+    }
+    if member.status != HostedMemberStatus::Active {
+        return Err(CloudError::AccessDenied);
+    }
+    let session_exists = connection
+        .query_row(
+            "SELECT 1 FROM device_sessions
+             WHERE token_hash = ?1 AND member_id = ?2 AND workspace_id = ?3 AND revoked_at IS NULL",
+            params![
+                blip_sync::hash_join_code(session_token),
+                member_id,
+                workspace_id
+            ],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some();
+    if !session_exists {
+        return Err(CloudError::AccessDenied);
+    }
+    Ok(member)
 }
 
 fn member_by_id(connection: &Connection, member_id: &str) -> Result<HostedMember, CloudError> {
@@ -706,6 +1073,40 @@ fn event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceEvent> {
         data,
         created_at: parse_time_for_row(row.get::<_, String>(7)?.as_str())?,
     })
+}
+
+fn list_presence_from(
+    connection: &Connection,
+    workspace_id: &str,
+) -> Result<Vec<MemberPresenceSummary>, CloudError> {
+    let mut statement = connection.prepare(
+        "SELECT p.member_id, m.display_name, m.role, p.last_seen_at
+         FROM presence p
+         JOIN members m ON m.id = p.member_id
+         WHERE p.workspace_id = ?1 AND m.status = 'active'
+         ORDER BY p.last_seen_at DESC",
+    )?;
+    let rows = statement.query_map([workspace_id], |row| {
+        Ok(MemberPresenceSummary {
+            member_id: row.get(0)?,
+            display_name: row.get(1)?,
+            role: parse_role_for_row(row.get::<_, String>(2)?.as_str())?,
+            last_seen_at: parse_time_for_row(row.get::<_, String>(3)?.as_str())?,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(CloudError::from)
+}
+
+fn normalized_tags(tags: Vec<String>) -> Vec<String> {
+    let mut normalized = tags
+        .into_iter()
+        .map(|tag| tag.trim().to_ascii_lowercase())
+        .filter(|tag| !tag.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
 }
 
 fn append_event(
@@ -857,6 +1258,23 @@ mod tests {
         let created = created.data.expect("workspace data should exist");
         assert_eq!(created.workspace.name, "auth-bug");
         assert_eq!(created.member.role, HostedRole::Owner);
+        assert_eq!(created.session.member_id, created.member.id);
+        assert!(!created.session.token.is_empty());
+
+        let (status, _code): (StatusCode, ApiEnvelope<CreateJoinCodeResponse>) = request_json(
+            router.clone(),
+            Method::POST,
+            format!("/v1/workspaces/{}/join-codes", created.workspace.id).as_str(),
+            json!({
+                "created_by_member_id": created.member.id,
+                "session_token": "wrong-session",
+                "role": "editor",
+                "expires_in_seconds": 3600,
+                "max_uses": 2
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
 
         let (status, code): (StatusCode, ApiEnvelope<CreateJoinCodeResponse>) = request_json(
             router.clone(),
@@ -864,6 +1282,7 @@ mod tests {
             format!("/v1/workspaces/{}/join-codes", created.workspace.id).as_str(),
             json!({
                 "created_by_member_id": created.member.id,
+                "session_token": created.session.token,
                 "role": "editor",
                 "expires_in_seconds": 3600,
                 "max_uses": 2
@@ -887,6 +1306,8 @@ mod tests {
         let joined = joined.data.expect("joined data should exist");
         assert_eq!(joined.member.role, HostedRole::Editor);
         assert_eq!(joined.workspace.id, created.workspace.id);
+        assert_eq!(joined.session.member_id, joined.member.id);
+        assert!(!joined.session.token.is_empty());
     }
 
     #[tokio::test]
@@ -900,6 +1321,47 @@ mod tests {
         )
         .await;
         let created = created.data.expect("workspace data should exist");
+        let (_, code): (StatusCode, ApiEnvelope<CreateJoinCodeResponse>) = request_json(
+            router.clone(),
+            Method::POST,
+            format!("/v1/workspaces/{}/join-codes", created.workspace.id).as_str(),
+            json!({
+                "created_by_member_id": created.member.id,
+                "session_token": created.session.token,
+                "role": "editor",
+                "expires_in_seconds": 3600,
+                "max_uses": 2
+            }),
+        )
+        .await;
+        let code = code.data.expect("join code should exist");
+        let (_, joined): (StatusCode, ApiEnvelope<JoinWorkspaceResponse>) = request_json(
+            router.clone(),
+            Method::POST,
+            "/v1/join",
+            json!({"code": code.raw_code, "display_name": "Web", "device_label": "browser", "client_kind": "web"}),
+        )
+        .await;
+        let joined = joined.data.expect("joined member should exist");
+
+        let (status, _published): (StatusCode, ApiEnvelope<PublishBlipResponse>) = request_json(
+            router.clone(),
+            Method::POST,
+            format!("/v1/workspaces/{}/blips", created.workspace.id).as_str(),
+            json!({
+                "publisher_member_id": created.member.id,
+                "session_token": "wrong-session",
+                "local_blip_id": "dev-inbox-unauthorized",
+                "content_type": "plain_text",
+                "content": "copied stack trace",
+                "preview": "copied stack trace",
+                "size_bytes": 18,
+                "is_redacted": false,
+                "tags": ["bug"]
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
 
         let (status, published): (StatusCode, ApiEnvelope<PublishBlipResponse>) = request_json(
             router.clone(),
@@ -907,6 +1369,7 @@ mod tests {
             format!("/v1/workspaces/{}/blips", created.workspace.id).as_str(),
             json!({
                 "publisher_member_id": created.member.id,
+                "session_token": created.session.token,
                 "local_blip_id": "dev-inbox-1",
                 "content_type": "plain_text",
                 "content": "copied stack trace",
@@ -920,7 +1383,20 @@ mod tests {
 
         assert_eq!(status, StatusCode::OK);
         let published = published.data.expect("published data should exist");
-        assert_eq!(published.blip.sequence, 2);
+        assert!(published.blip.sequence > 1);
+
+        let unauthorized = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/v1/workspaces/{}/blips", created.workspace.id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("unauthorized list request should complete");
+        assert_eq!(unauthorized.status(), StatusCode::FORBIDDEN);
 
         let response = router
             .clone()
@@ -928,6 +1404,8 @@ mod tests {
                 Request::builder()
                     .method(Method::GET)
                     .uri(format!("/v1/workspaces/{}/blips", created.workspace.id))
+                    .header("x-blip-member-id", joined.member.id.as_str())
+                    .header("authorization", format!("Bearer {}", joined.session.token))
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -939,6 +1417,120 @@ mod tests {
         let listed: ApiEnvelope<Vec<HostedBlipSummary>> =
             serde_json::from_slice(&bytes).expect("list should decode");
         assert_eq!(listed.data.expect("blips should exist").len(), 1);
+        let blip_id = published.blip.id.clone();
+
+        let (status, _detail): (StatusCode, ApiEnvelope<HostedBlipSummary>) = request_json(
+            router.clone(),
+            Method::GET,
+            format!("/v1/workspaces/{}/blips/{}", created.workspace.id, blip_id).as_str(),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/v1/workspaces/{}/blips/{}",
+                        created.workspace.id, blip_id
+                    ))
+                    .header("x-blip-member-id", joined.member.id.as_str())
+                    .header("authorization", format!("Bearer {}", joined.session.token))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("detail request should complete");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body should read");
+        let detail: ApiEnvelope<HostedBlipSummary> =
+            serde_json::from_slice(&bytes).expect("detail should decode");
+        assert_eq!(detail.data.expect("detail should exist").id, blip_id);
+
+        let (status, tags): (StatusCode, ApiEnvelope<UpdateTagsResponse>) = request_json(
+            router.clone(),
+            Method::POST,
+            format!(
+                "/v1/workspaces/{}/blips/{}/tags",
+                created.workspace.id, blip_id
+            )
+            .as_str(),
+            json!({
+                "member_id": joined.member.id,
+                "session_token": joined.session.token,
+                "tags": [" Bug ", "bug", "ui"]
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            tags.data.expect("tags response should exist").blip.tags,
+            vec!["bug".to_string(), "ui".to_string()]
+        );
+
+        let (status, _tags): (StatusCode, ApiEnvelope<UpdateTagsResponse>) = request_json(
+            router.clone(),
+            Method::POST,
+            format!(
+                "/v1/workspaces/{}/blips/{}/tags",
+                created.workspace.id, blip_id
+            )
+            .as_str(),
+            json!({
+                "member_id": joined.member.id,
+                "session_token": "wrong-session",
+                "tags": ["nope"]
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let (status, access): (StatusCode, ApiEnvelope<RecordAccessEventResponse>) = request_json(
+            router.clone(),
+            Method::POST,
+            format!(
+                "/v1/workspaces/{}/blips/{}/access-events",
+                created.workspace.id, blip_id
+            )
+            .as_str(),
+            json!({
+                "member_id": joined.member.id,
+                "session_token": joined.session.token,
+                "action": "copy"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            access
+                .data
+                .expect("access event should exist")
+                .event
+                .event_type,
+            "blip_copied"
+        );
+
+        let (status, presence): (StatusCode, ApiEnvelope<PresenceHeartbeatResponse>) =
+            request_json(
+                router.clone(),
+                Method::POST,
+                format!("/v1/workspaces/{}/presence", created.workspace.id).as_str(),
+                json!({
+                    "member_id": joined.member.id,
+                    "session_token": joined.session.token
+                }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            presence.data.expect("presence should exist").members.len(),
+            1
+        );
 
         let response = router
             .oneshot(
@@ -948,6 +1540,8 @@ mod tests {
                         "/v1/workspaces/{}/events?after_sequence=1",
                         created.workspace.id
                     ))
+                    .header("x-blip-member-id", joined.member.id.as_str())
+                    .header("authorization", format!("Bearer {}", joined.session.token))
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -959,7 +1553,17 @@ mod tests {
         let events: ApiEnvelope<Vec<WorkspaceEvent>> =
             serde_json::from_slice(&bytes).expect("events should decode");
         let events = events.data.expect("events should exist");
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_type, "blip_published");
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == "blip_published")
+        );
+        assert!(!events.iter().any(|event| event.event_type == "blip_read"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == "blip_tags_updated")
+        );
+        assert!(events.iter().any(|event| event.event_type == "blip_copied"));
     }
 }

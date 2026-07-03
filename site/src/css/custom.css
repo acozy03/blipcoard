@@ -19,19 +19,19 @@
     "Bedstead", "Departure Mono", "Pixel Code", "Input Mono", "Berkeley Mono",
     "CommitMono", "JetBrains Mono", "Cascadia Mono", "SF Mono", ui-monospace,
     SFMono-Regular, Menlo, Consolas, monospace;
-  --blip-blue: #146382;
-  --blip-blue-strong: #0e526c;
-  --blip-blue-soft: #e7f2f7;
+  --blip-blue: #006cfd;
+  --blip-blue-strong: #0056ca;
+  --blip-blue-soft: #eaf3ff;
   --blip-border: #d6dde2;
   --blip-surface: #ffffff;
   --blip-canvas: #f5f7f9;
-  --ifm-color-primary: #146382;
-  --ifm-color-primary-dark: #0e526c;
-  --ifm-color-primary-darker: #0b455c;
-  --ifm-color-primary-darkest: #09384a;
-  --ifm-color-primary-light: #247898;
-  --ifm-color-primary-lighter: #368bab;
-  --ifm-color-primary-lightest: #77c4e2;
+  --ifm-color-primary: #006cfd;
+  --ifm-color-primary-dark: #0056ca;
+  --ifm-color-primary-darker: #004aa8;
+  --ifm-color-primary-darkest: #003b85;
+  --ifm-color-primary-light: #3389ff;
+  --ifm-color-primary-lighter: #5aa1ff;
+  --ifm-color-primary-lightest: #9bc6ff;
   --ifm-background-color: var(--blip-canvas);
   --ifm-navbar-background-color: #ffffff;
   --ifm-footer-background-color: #202328;
@@ -42,27 +42,27 @@
   --ifm-code-background: #eef4f7;
   --ifm-pre-background: #f0f5f8;
   --ifm-global-radius: 6px;
-  --docusaurus-highlighted-code-line-bg: rgba(20, 99, 130, 0.14);
+  --docusaurus-highlighted-code-line-bg: rgba(0, 108, 253, 0.14);
 }
 
 [data-theme='dark'] {
-  --blip-blue-soft: #173344;
+  --blip-blue-soft: #142842;
   --blip-border: #3a4148;
   --blip-surface: #24272b;
   --blip-canvas: #17191b;
-  --ifm-color-primary: #77c4e2;
-  --ifm-color-primary-dark: #54b2d5;
-  --ifm-color-primary-darker: #3c9fc4;
-  --ifm-color-primary-darkest: #2d708d;
-  --ifm-color-primary-light: #93d2ea;
-  --ifm-color-primary-lighter: #b0dfef;
-  --ifm-color-primary-lightest: #d1edf6;
+  --ifm-color-primary: #78b5ff;
+  --ifm-color-primary-dark: #5aa1ff;
+  --ifm-color-primary-darker: #3389ff;
+  --ifm-color-primary-darkest: #006cfd;
+  --ifm-color-primary-light: #9bc6ff;
+  --ifm-color-primary-lighter: #c0dcff;
+  --ifm-color-primary-lightest: #e3f0ff;
   --ifm-background-color: var(--blip-canvas);
   --ifm-navbar-background-color: #1f2225;
   --ifm-footer-background-color: #17191b;
   --ifm-code-background: #202b31;
   --ifm-pre-background: #202328;
-  --docusaurus-highlighted-code-line-bg: rgba(119, 196, 226, 0.16);
+  --docusaurus-highlighted-code-line-bg: rgba(120, 181, 255, 0.16);
 }
 
 html {
@@ -87,8 +87,15 @@ body {
   letter-spacing: 0;
 }
 
+.navbar__logo {
+  width: 34px;
+  height: 34px;
+}
+
 .navbar__logo img {
-  color: var(--blip-blue);
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
 }
 
 .theme-doc-sidebar-container,
@@ -130,7 +137,7 @@ body {
   display: block;
   margin: 0 calc(-1 * var(--ifm-pre-padding));
   padding: 0 var(--ifm-pre-padding);
-  background: rgba(20, 99, 130, 0.16);
+  background: rgba(0, 108, 253, 0.16);
 }
 
 .DocSearch-Button,

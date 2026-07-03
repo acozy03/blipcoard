@@ -84,6 +84,11 @@ if [[ -d apps/desktop ]]; then
   npm --prefix apps/desktop install
 fi
 
+if [[ -d apps/web ]]; then
+  echo "==> installing web dependencies"
+  npm --prefix apps/web install
+fi
+
 echo "==> configuring git hooks"
 npm run hooks:install
 
@@ -92,6 +97,11 @@ cargo build --workspace --locked
 
 echo "==> validating docs build"
 npm run docs:build
+
+if [[ -d apps/web ]]; then
+  echo "==> validating hosted web build"
+  npm run web:build
+fi
 
 if [[ "${install_runtime}" == "1" ]]; then
   echo "==> installing blip and blipd into ~/.local/bin"
@@ -121,6 +131,7 @@ blipcoard setup complete.
 
 Checkout: ${repo_root}
 Docs:     npm run docs:start
+Web:      npm run web:dev
 CLI:      ${HOME}/.local/bin/blip
 Daemon:   ${HOME}/.local/bin/blipd
 

@@ -8,6 +8,16 @@ Run locally:
 BLIPCOARD_CLOUD_DB=./blipcoard-cloud.db cargo run -p blip-cloud
 ```
 
+Start the browser hosted workspace client from the repository root:
+
+```sh
+npm run web:dev
+```
+
+The web client joins a workspace with a relay URL and join code, then uses the
+redeemed member/device session for blip reads, tag updates, copy/export audit
+events, and presence.
+
 Default bind address:
 
 ```text

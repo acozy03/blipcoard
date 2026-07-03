@@ -20,8 +20,8 @@
     "Bedstead", "Departure Mono", "Pixel Code", "Input Mono", "Berkeley Mono",
     "CommitMono", "JetBrains Mono", "Cascadia Mono", "SF Mono", ui-monospace,
     SFMono-Regular, Menlo, Consolas, monospace;
-  --brand-blue: #146382;
-  --brand-blue-strong: #0e526c;
+  --brand-blue: #006cfd;
+  --brand-blue-strong: #0056ca;
   --text: #20272b;
   --text-strong: #101820;
   --muted: #66737c;
@@ -34,9 +34,9 @@
   --surface-soft: #f7f9fb;
   --border: #d6dde2;
   --border-strong: #a9bac6;
-  --accent-soft: #e7f2f7;
-  --accent-border: #9dc2d1;
-  --accent-text: #0e526c;
+  --accent-soft: #eaf3ff;
+  --accent-border: #9bc6ff;
+  --accent-text: #004aa8;
   --danger: #9a3324;
   --danger-bg: #fff8f6;
   --danger-border: #e0b4aa;
@@ -62,9 +62,9 @@
     --surface-soft: #202328;
     --border: #3a4148;
     --border-strong: #52636f;
-    --accent-soft: #173344;
-    --accent-border: #2d708d;
-    --accent-text: #77c4e2;
+    --accent-soft: #142842;
+    --accent-border: #2a6fca;
+    --accent-text: #78b5ff;
     --danger: #ffb2a4;
     --danger-bg: #321f1d;
     --danger-border: #74433d;
@@ -111,9 +111,19 @@ button {
   min-width: 0;
 }
 
-.brand-lockup > svg {
+.brand-lockup > svg,
+.brand-lockup > img {
   flex: 0 0 auto;
+}
+
+.brand-lockup > svg {
   color: var(--brand-blue);
+}
+
+.brand-lockup > img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
 }
 
 .brand-lockup h1,
