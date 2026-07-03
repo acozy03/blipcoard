@@ -20,6 +20,9 @@ Every supported install includes `blipd`. The CLI and desktop app are clients of
 the daemon runtime; they must not become separate clipboard watchers or policy
 engines.
 
+CLI-only install and operations details live in
+[`cli-operations.md`](cli-operations.md).
+
 ## Component Ownership
 
 - `blipd` owns clipboard watching, ingestion, duplicate suppression, retention
@@ -170,6 +173,6 @@ blob, and log data. Purge must never be the default uninstall behavior.
 - Phase 9.2 should make desktop bundles include `blipd` and `blip`.
 - Phase 9.3 implements macOS and Linux service startup and documents concrete
   log locations. Windows remains blocked by the Windows IPC follow-up.
-- Phase 9.4 should turn the CLI-only mode into install and operations docs.
+- Phase 9.4 documents CLI-only install and operations in `cli-operations.md`.
 - Phase 9.5 should define backup, upgrade, and migration checks around the
   config, SQLite database, and blob directory.
