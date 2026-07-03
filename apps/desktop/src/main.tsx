@@ -12,7 +12,9 @@ import {
   Keyboard,
   Loader2,
   RefreshCw,
+  Share2,
   Shield,
+  UploadCloud,
   UserRound,
   Workflow
 } from "lucide-react";
@@ -22,6 +24,10 @@ import {
   exportPayload,
   getBlip,
   getPayloadPreview,
+  hostedJoinWorkspace,
+  hostedPublishBlip,
+  hostedSetStickyShare,
+  hostedStatus,
   listAuditEvents,
   listWorkspaceBlips,
   listWorkspaces,
@@ -31,6 +37,7 @@ import {
   type AuditEventSummary,
   type BlipDetail,
   type BlipSummary,
+  type HostedStatusResponse,
   type PayloadSummary,
   type PayloadBytesResponse,
   type ShortcutRegistration,
@@ -78,6 +85,19 @@ type SendState =
   | { status: "sent"; message: string }
   | { status: "error"; message: string };
 
+type HostedState =
+  | { status: "loading" }
+  | { status: "ready"; hosted: HostedStatusResponse }
+  | { status: "error"; message: string };
+
+type HostedActionState =
+  | { status: "idle" }
+  | { status: "joining" }
+  | { status: "publishing" }
+  | { status: "updating" }
+  | { status: "done"; message: string }
+  | { status: "error"; message: string };
+
 function App() {
   const [workspaceState, setWorkspaceState] = React.useState<WorkspaceState>({
     status: "loading"
@@ -93,6 +113,13 @@ function App() {
   const [auditState, setAuditState] = React.useState<AuditState>({ status: "loading" });
   const [shortcutState, setShortcutState] = React.useState<ShortcutState>({ status: "loading" });
   const [sendState, setSendState] = React.useState<SendState>({ status: "idle" });
+  const [hostedState, setHostedState] = React.useState<HostedState>({ status: "loading" });
+  const [hostedActionState, setHostedActionState] = React.useState<HostedActionState>({
+    status: "idle"
+  });
+  const [joinServiceUrl, setJoinServiceUrl] = React.useState("http://127.0.0.1:8732");
+  const [joinCode, setJoinCode] = React.useState("");
+  const [joinDisplayName, setJoinDisplayName] = React.useState("");
 
   React.useEffect(() => {
     selectedWorkspaceRef.current = selectedWorkspace;
@@ -195,15 +222,36 @@ function App() {
       .then((response) =>
         setShortcutState({ status: "ready", shortcuts: response.shortcuts })
       )
+      .catch(() => {
+        setShortcutState({
+          status: "ready",
+          shortcuts: [
+            {
+              id: "route-latest-to-active",
+              label: "Route latest to active",
+              accelerator: "Ctrl+Alt+B",
+              action: "route_latest_inbox_to_active_workspace",
+              state: "unsupported",
+              message: "Global shortcuts require desktop support from the running app"
+            }
+          ]
+        });
+      });
+  }, []);
+
+  const loadHosted = React.useCallback(() => {
+    hostedStatus()
+      .then((hosted) => setHostedState({ status: "ready", hosted }))
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : "Unable to register shortcuts";
-        setShortcutState({ status: "error", message });
+        const message = error instanceof Error ? error.message : "Unable to load hosted status";
+        setHostedState({ status: "error", message });
       });
   }, []);
 
   const refresh = React.useCallback(() => {
     setWorkspaceState({ status: "loading" });
     loadAudit();
+    loadHosted();
     loadShortcuts();
     Promise.all([listWorkspaces(), currentWorkspace()])
       .then(([workspaceResponse, currentResponse]) => {
@@ -237,7 +285,7 @@ function App() {
         setSelectedBlipId(null);
         setDetailState({ status: "idle" });
       });
-  }, [loadAudit, loadBlips, loadShortcuts]);
+  }, [loadAudit, loadBlips, loadHosted, loadShortcuts]);
 
   React.useEffect(() => {
     refresh();
@@ -334,6 +382,71 @@ function App() {
       });
   };
 
+  const joinHostedWorkspace = () => {
+    setHostedActionState({ status: "joining" });
+    hostedJoinWorkspace({
+      service_url: joinServiceUrl,
+      join_code: joinCode,
+      display_name: joinDisplayName
+    })
+      .then((hosted) => {
+        setHostedState({ status: "ready", hosted });
+        setHostedActionState({
+          status: "done",
+          message: `Joined ${hosted.workspace_name ?? "hosted workspace"}`
+        });
+        loadAudit();
+        refresh();
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "Unable to join hosted workspace";
+        setHostedActionState({ status: "error", message });
+      });
+  };
+
+  const publishSelectedBlip = () => {
+    const blipId = selectedBlipIdRef.current;
+    if (!blipId) {
+      return;
+    }
+
+    setHostedActionState({ status: "publishing" });
+    hostedPublishBlip(blipId)
+      .then((published) => {
+        setHostedActionState({
+          status: "done",
+          message: `Published ${published.local_blip_id}`
+        });
+        loadAudit();
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "Unable to publish blip";
+        setHostedActionState({ status: "error", message });
+      });
+  };
+
+  const toggleHostedStickyShare = () => {
+    if (hostedState.status !== "ready") {
+      return;
+    }
+
+    setHostedActionState({ status: "updating" });
+    hostedSetStickyShare(!hostedState.hosted.sticky_share_enabled)
+      .then((hosted) => {
+        setHostedState({ status: "ready", hosted });
+        setHostedActionState({
+          status: "done",
+          message: hosted.sticky_share_enabled ? "Sticky share enabled" : "Sticky share disabled"
+        });
+        loadAudit();
+        refresh();
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "Unable to update sticky share";
+        setHostedActionState({ status: "error", message });
+      });
+  };
+
   const selectedSummary =
     workspaceState.status === "ready"
       ? workspaceState.workspaces.find((workspace) => workspace.name === selectedWorkspace)
@@ -389,6 +502,21 @@ function App() {
               sendState={sendState}
             />
           ) : null}
+          <HostedPanel
+            actionState={hostedActionState}
+            joinCode={joinCode}
+            joinDisplayName={joinDisplayName}
+            joinServiceUrl={joinServiceUrl}
+            selectedBlipId={selectedBlipId}
+            state={hostedState}
+            onJoin={joinHostedWorkspace}
+            onPublish={publishSelectedBlip}
+            onRefresh={loadHosted}
+            onServiceUrlChange={setJoinServiceUrl}
+            onJoinCodeChange={setJoinCode}
+            onDisplayNameChange={setJoinDisplayName}
+            onToggleStickyShare={toggleHostedStickyShare}
+          />
           <div className="workspace-main">
             <BlipPanel
               selectedBlipId={selectedBlipId}
@@ -408,6 +536,128 @@ function App() {
       </section>
     </main>
   );
+}
+
+function HostedPanel({
+  actionState,
+  joinCode,
+  joinDisplayName,
+  joinServiceUrl,
+  selectedBlipId,
+  state,
+  onJoin,
+  onPublish,
+  onRefresh,
+  onServiceUrlChange,
+  onJoinCodeChange,
+  onDisplayNameChange,
+  onToggleStickyShare
+}: {
+  actionState: HostedActionState;
+  joinCode: string;
+  joinDisplayName: string;
+  joinServiceUrl: string;
+  selectedBlipId: string | null;
+  state: HostedState;
+  onJoin: () => void;
+  onPublish: () => void;
+  onRefresh: () => void;
+  onServiceUrlChange: (value: string) => void;
+  onJoinCodeChange: (value: string) => void;
+  onDisplayNameChange: (value: string) => void;
+  onToggleStickyShare: () => void;
+}) {
+  const hosted = state.status === "ready" ? state.hosted : null;
+  const connected = hosted?.connected ?? false;
+  const busy =
+    actionState.status === "joining" ||
+    actionState.status === "publishing" ||
+    actionState.status === "updating";
+  const canJoin = joinServiceUrl.trim() !== "" && joinCode.trim() !== "" && joinDisplayName.trim() !== "";
+
+  return (
+    <section className="hosted-panel">
+      <div className="hosted-title">
+        <Share2 aria-hidden="true" size={18} />
+        <div>
+          <h2>Hosted share</h2>
+          <p>{hostedStatusText(state)}</p>
+        </div>
+      </div>
+      <div className="hosted-controls">
+        <label>
+          <span>Relay</span>
+          <input
+            value={joinServiceUrl}
+            onChange={(event) => onServiceUrlChange(event.currentTarget.value)}
+            placeholder="http://127.0.0.1:8732"
+          />
+        </label>
+        <label>
+          <span>Code</span>
+          <input
+            value={joinCode}
+            onChange={(event) => onJoinCodeChange(event.currentTarget.value)}
+            placeholder="BLIP-0000-0000-0000"
+          />
+        </label>
+        <label>
+          <span>Name</span>
+          <input
+            value={joinDisplayName}
+            onChange={(event) => onDisplayNameChange(event.currentTarget.value)}
+            placeholder="Adrian"
+          />
+        </label>
+      </div>
+      <div className="hosted-actions">
+        <button className="text-button" type="button" onClick={onJoin} disabled={busy || !canJoin}>
+          {actionState.status === "joining" ? "Joining" : connected ? "Rejoin" : "Join"}
+        </button>
+        <button
+          className="text-button"
+          type="button"
+          onClick={onPublish}
+          disabled={busy || !connected || !selectedBlipId}
+        >
+          <UploadCloud aria-hidden="true" size={15} />
+          {actionState.status === "publishing" ? "Publishing" : "Publish blip"}
+        </button>
+        <button
+          className="text-button"
+          type="button"
+          onClick={onToggleStickyShare}
+          disabled={busy || !connected}
+        >
+          {hosted?.sticky_share_enabled ? "Share sticky on" : "Share sticky off"}
+        </button>
+        <button className="icon-button" type="button" onClick={onRefresh} aria-label="Refresh hosted">
+          <RefreshCw aria-hidden="true" size={16} />
+        </button>
+      </div>
+      {actionState.status === "done" || actionState.status === "error" ? (
+        <p className={actionState.status === "error" ? "hosted-message error" : "hosted-message"}>
+          {actionState.message}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function hostedStatusText(state: HostedState) {
+  if (state.status === "loading") {
+    return "Loading hosted status";
+  }
+  if (state.status === "error") {
+    return state.message;
+  }
+  if (!state.hosted.connected) {
+    return "Local-only";
+  }
+
+  const name = state.hosted.workspace_name ?? state.hosted.workspace_id ?? "workspace";
+  const role = state.hosted.member_role ?? "member";
+  return `${name} - ${role}`;
 }
 
 function ShortcutPanel({ state }: { state: ShortcutState }) {
@@ -583,6 +833,12 @@ function WorkspaceList({
               </span>
             ) : null}
             {workspace.sticky_capture ? <span className="sticky-marker">Sticky</span> : null}
+            {workspace.hosted_share_enabled ? (
+              <span className="share-marker">
+                <Share2 aria-hidden="true" size={13} />
+                Shared
+              </span>
+            ) : null}
           </button>
         );
       })}
@@ -642,7 +898,16 @@ function workspaceStatusText(workspace: WorkspaceSummary, sendState: SendState) 
     return sendState.message;
   }
 
-  return workspace.agent_access ? "Agent-readable" : "Human-only";
+  return workspaceAccessText(workspace);
+}
+
+function workspaceAccessText(workspace: WorkspaceSummary) {
+  const access = workspace.agent_access ? "Agent-readable" : "Human-only";
+  if (workspace.hosted_share_enabled) {
+    return `${access} / hosted sticky`;
+  }
+
+  return access;
 }
 
 function BlipPanel({

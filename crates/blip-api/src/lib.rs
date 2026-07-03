@@ -55,6 +55,10 @@ pub enum DaemonCommand {
     ListAuditEvents,
     RouteBlip,
     RouteLatestInboxBlip,
+    HostedStatus,
+    HostedJoinWorkspace,
+    HostedPublishBlip,
+    HostedSetStickyShare,
     AgentRecentBlips,
     AgentSearchBlips,
     AgentBundle,
@@ -79,6 +83,10 @@ impl DaemonCommand {
             Self::ListAuditEvents => "list_audit_events",
             Self::RouteBlip => "route_blip",
             Self::RouteLatestInboxBlip => "route_latest_inbox_blip",
+            Self::HostedStatus => "hosted_status",
+            Self::HostedJoinWorkspace => "hosted_join_workspace",
+            Self::HostedPublishBlip => "hosted_publish_blip",
+            Self::HostedSetStickyShare => "hosted_set_sticky_share",
             Self::AgentRecentBlips => "agent_recent_blips",
             Self::AgentSearchBlips => "agent_search_blips",
             Self::AgentBundle => "agent_bundle",
@@ -139,6 +147,19 @@ pub enum DaemonRequestPayload {
     },
     RouteLatestInboxBlip {
         workspace: String,
+    },
+    HostedStatus,
+    HostedJoinWorkspace {
+        service_url: String,
+        join_code: String,
+        display_name: String,
+        device_label: Option<String>,
+    },
+    HostedPublishBlip {
+        blip_id: String,
+    },
+    HostedSetStickyShare {
+        enabled: bool,
     },
     AgentRecentBlips {
         workspace: String,
@@ -222,6 +243,10 @@ pub enum DaemonResponsePayload {
     AgentBlips(AgentBlipListResponse),
     AgentBundle(AgentBundleResponse),
     BlipRouted(BlipRoutedResponse),
+    HostedStatus(HostedStatusResponse),
+    HostedWorkspaceJoined(HostedStatusResponse),
+    HostedBlipPublished(HostedPublishResponse),
+    HostedStickyShareSet(HostedStatusResponse),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,6 +278,32 @@ pub struct WorkspaceSummary {
     pub rich_payload_visibility: String,
     #[serde(default)]
     pub agent_raw_payload_access: bool,
+    #[serde(default)]
+    pub hosted_share_enabled: bool,
+    #[serde(default)]
+    pub hosted_workspace_id: Option<String>,
+    #[serde(default)]
+    pub hosted_workspace_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostedStatusResponse {
+    pub connected: bool,
+    pub service_url: Option<String>,
+    pub workspace_id: Option<String>,
+    pub workspace_name: Option<String>,
+    pub member_id: Option<String>,
+    pub member_display_name: Option<String>,
+    pub member_role: Option<String>,
+    pub sticky_share_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostedPublishResponse {
+    pub local_blip_id: String,
+    pub hosted_blip_id: String,
+    pub hosted_workspace_id: String,
+    pub sequence: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

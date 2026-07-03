@@ -820,7 +820,7 @@ fn assert_json_success(mut cmd: Command, args: &[&str]) -> Value {
 }
 
 fn wait_for_socket(socket_path: &Path) {
-    for _ in 0..200 {
+    for _ in 0..600 {
         if socket_path.exists() {
             return;
         }

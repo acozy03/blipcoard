@@ -24,7 +24,7 @@ const DEFAULT_PAYLOAD_INLINE_PREVIEW_CHARS: i64 = 4096;
 const BUSY_RETRY_ATTEMPTS: usize = 5;
 const BUSY_RETRY_DELAY: Duration = Duration::from_millis(25);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
-const SCHEMA_VERSION: i32 = 6;
+const SCHEMA_VERSION: i32 = 7;
 
 struct Migration {
     version: i32,
@@ -55,6 +55,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 6,
         sql: include_str!("sql/006_rich_payload_policy_audit.sql"),
+    },
+    Migration {
+        version: 7,
+        sql: include_str!("sql/007_hosted_audit_events.sql"),
     },
 ];
 
@@ -776,6 +780,35 @@ impl BlipStore {
             audit.event_type,
             audit.target_blip_id.clone(),
             audit.target_workspace.clone(),
+            Some(details.to_string()),
+        )
+    }
+
+    pub fn record_hosted_event(
+        &mut self,
+        event_type: AuditEventType,
+        target_blip_id: Option<String>,
+        target_workspace: Option<String>,
+        details: serde_json::Value,
+    ) -> Result<(), BlipError> {
+        if !matches!(
+            event_type,
+            AuditEventType::HostedWorkspaceJoined
+                | AuditEventType::HostedBlipPublished
+                | AuditEventType::HostedStickyShareChanged
+        ) {
+            return Err(BlipError::InvalidInput {
+                field: "event_type",
+                reason: "must be a hosted audit event",
+            });
+        }
+
+        self.record_audit_event(
+            ActorType::User,
+            Some("hosted".to_owned()),
+            event_type,
+            target_blip_id,
+            target_workspace,
             Some(details.to_string()),
         )
     }

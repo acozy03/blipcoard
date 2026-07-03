@@ -2,8 +2,8 @@ use blip_api::{
     AuditEventListResponse, BlipDetail, BlipListResponse, BlipRoutedResponse,
     CurrentWorkspaceResponse, DAEMON_API_VERSION, DaemonApiError, DaemonApiErrorCode,
     DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse, DaemonResponsePayload,
-    DaemonResponseStatus, PayloadBytesResponse, PayloadRequester, PayloadSummary,
-    WorkspaceListResponse, WorkspaceSummary,
+    DaemonResponseStatus, HostedPublishResponse, HostedStatusResponse, PayloadBytesResponse,
+    PayloadRequester, PayloadSummary, WorkspaceListResponse, WorkspaceSummary,
 };
 use blip_config::{BlipConfig, ConfigError};
 use serde::{Deserialize, Serialize};
@@ -87,6 +87,10 @@ fn main() {
             activate_workspace,
             set_sticky_capture,
             route_latest_inbox_blip,
+            hosted_status,
+            hosted_join_workspace,
+            hosted_publish_blip,
+            hosted_set_sticky_share,
             register_global_shortcuts,
         ])
         .run(tauri::generate_context!())
@@ -278,6 +282,79 @@ fn route_latest_inbox_blip(
             _ => None,
         },
         "blip_routed",
+    )
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn hosted_status(app: tauri::AppHandle) -> Result<HostedStatusResponse, DesktopError> {
+    daemon_payload(
+        &app,
+        DaemonCommand::HostedStatus,
+        DaemonRequestPayload::HostedStatus,
+        |payload| match payload {
+            DaemonResponsePayload::HostedStatus(response) => Some(response),
+            _ => None,
+        },
+        "hosted_status",
+    )
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn hosted_join_workspace(
+    app: tauri::AppHandle,
+    service_url: String,
+    join_code: String,
+    display_name: String,
+    device_label: Option<String>,
+) -> Result<HostedStatusResponse, DesktopError> {
+    daemon_payload(
+        &app,
+        DaemonCommand::HostedJoinWorkspace,
+        DaemonRequestPayload::HostedJoinWorkspace {
+            service_url,
+            join_code,
+            display_name,
+            device_label,
+        },
+        |payload| match payload {
+            DaemonResponsePayload::HostedWorkspaceJoined(response) => Some(response),
+            _ => None,
+        },
+        "hosted_workspace_joined",
+    )
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn hosted_publish_blip(
+    app: tauri::AppHandle,
+    blip_id: String,
+) -> Result<HostedPublishResponse, DesktopError> {
+    daemon_payload(
+        &app,
+        DaemonCommand::HostedPublishBlip,
+        DaemonRequestPayload::HostedPublishBlip { blip_id },
+        |payload| match payload {
+            DaemonResponsePayload::HostedBlipPublished(response) => Some(response),
+            _ => None,
+        },
+        "hosted_blip_published",
+    )
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn hosted_set_sticky_share(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<HostedStatusResponse, DesktopError> {
+    daemon_payload(
+        &app,
+        DaemonCommand::HostedSetStickyShare,
+        DaemonRequestPayload::HostedSetStickyShare { enabled },
+        |payload| match payload {
+            DaemonResponsePayload::HostedStickyShareSet(response) => Some(response),
+            _ => None,
+        },
+        "hosted_sticky_share_set",
     )
 }
 

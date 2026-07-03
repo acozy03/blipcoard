@@ -3,8 +3,8 @@ use blip_api::{
     BlipListResponse, BlipRoutedResponse, CurrentWorkspaceResponse, DAEMON_API_VERSION,
     DaemonApiError, DaemonCommand, DaemonRequest, DaemonRequestPayload, DaemonResponse,
     DaemonResponsePayload, DaemonResponseStatus, DaemonVersionResponse, HealthResponse,
-    PayloadBytesResponse, PayloadRequester, PayloadSummary, WorkspaceListResponse,
-    WorkspaceSummary,
+    HostedPublishResponse, HostedStatusResponse, PayloadBytesResponse, PayloadRequester,
+    PayloadSummary, WorkspaceListResponse, WorkspaceSummary,
 };
 use blip_config::{BlipConfig, ConfigError};
 use std::error::Error;
@@ -402,6 +402,89 @@ impl DaemonClient {
         }
     }
 
+    pub fn hosted_status(&self) -> Result<HostedStatusResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("hosted-status"),
+            DaemonCommand::HostedStatus,
+            DaemonRequestPayload::HostedStatus,
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::HostedStatus(status)) => Ok(status),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::HostedStatus,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn hosted_join_workspace(
+        &self,
+        service_url: &str,
+        join_code: &str,
+        display_name: &str,
+        device_label: Option<String>,
+    ) -> Result<HostedStatusResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("hosted-join"),
+            DaemonCommand::HostedJoinWorkspace,
+            DaemonRequestPayload::HostedJoinWorkspace {
+                service_url: service_url.to_owned(),
+                join_code: join_code.to_owned(),
+                display_name: display_name.to_owned(),
+                device_label,
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::HostedWorkspaceJoined(status)) => Ok(status),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::HostedJoinWorkspace,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn hosted_publish_blip(
+        &self,
+        blip_id: &str,
+    ) -> Result<HostedPublishResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("hosted-publish"),
+            DaemonCommand::HostedPublishBlip,
+            DaemonRequestPayload::HostedPublishBlip {
+                blip_id: blip_id.to_owned(),
+            },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::HostedBlipPublished(published)) => Ok(published),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::HostedPublishBlip,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
+    pub fn hosted_set_sticky_share(
+        &self,
+        enabled: bool,
+    ) -> Result<HostedStatusResponse, DaemonClientError> {
+        let response = self.request(DaemonRequest::new(
+            next_request_id("hosted-sticky-share"),
+            DaemonCommand::HostedSetStickyShare,
+            DaemonRequestPayload::HostedSetStickyShare { enabled },
+        ))?;
+
+        match response.payload {
+            Some(DaemonResponsePayload::HostedStickyShareSet(status)) => Ok(status),
+            other => Err(DaemonClientError::UnexpectedPayload {
+                command: DaemonCommand::HostedSetStickyShare,
+                payload: payload_name(other.as_ref()),
+            }),
+        }
+    }
+
     pub fn request(&self, request: DaemonRequest) -> Result<DaemonResponse, DaemonClientError> {
         let response = platform::request(&self.socket_path, &request)?;
 
@@ -536,6 +619,10 @@ fn payload_name(payload: Option<&DaemonResponsePayload>) -> &'static str {
         Some(DaemonResponsePayload::AgentBlips(_)) => "agent_blips",
         Some(DaemonResponsePayload::AgentBundle(_)) => "agent_bundle",
         Some(DaemonResponsePayload::BlipRouted(_)) => "blip_routed",
+        Some(DaemonResponsePayload::HostedStatus(_)) => "hosted_status",
+        Some(DaemonResponsePayload::HostedWorkspaceJoined(_)) => "hosted_workspace_joined",
+        Some(DaemonResponsePayload::HostedBlipPublished(_)) => "hosted_blip_published",
+        Some(DaemonResponsePayload::HostedStickyShareSet(_)) => "hosted_sticky_share_set",
         None => "none",
     }
 }

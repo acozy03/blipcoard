@@ -25,6 +25,20 @@ pub struct BlipConfig {
     pub database_path: PathBuf,
     #[serde(default)]
     pub capture: CaptureConfig,
+    #[serde(default)]
+    pub hosted: HostedConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostedConfig {
+    pub service_url: Option<String>,
+    pub workspace_id: Option<String>,
+    pub workspace_name: Option<String>,
+    pub member_id: Option<String>,
+    pub member_display_name: Option<String>,
+    pub member_role: Option<String>,
+    #[serde(default)]
+    pub sticky_share_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +135,7 @@ impl BlipConfig {
         Ok(Self {
             database_path: data_dir.join("blipcoard.db"),
             capture: CaptureConfig::default(),
+            hosted: HostedConfig::default(),
         })
     }
 
@@ -202,6 +217,7 @@ mod tests {
         assert!(config.capture.rtf_enabled());
         assert!(config.capture.unknown_enabled());
         assert!(config.capture.image_previews);
+        assert_eq!(config.hosted, HostedConfig::default());
     }
 
     #[test]

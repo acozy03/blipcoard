@@ -14,6 +14,7 @@ blip-api = { path = "../blip-api" }
 blip-clipboard = { path = "../blip-clipboard" }
 blip-config = { path = "../blip-config" }
 blip-core = { path = "../blip-core" }
+blip-sync = { path = "../blip-sync" }
 chrono.workspace = true
 image.workspace = true
 serde_json.workspace = true

@@ -5,10 +5,15 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use blip_sync::{HostedJoinCode, HostedMember, HostedRole, JoinCodeOptions, RateLimitDecision};
+use blip_sync::{
+    ApiEnvelope, ApiError, CreateJoinCodeRequest, CreateJoinCodeResponse, CreateWorkspaceRequest,
+    CreateWorkspaceResponse, EventQuery, HealthResponse, HostedBlipSummary, HostedJoinCode,
+    HostedMember, HostedRole, HostedWorkspaceSummary, JoinCodeOptions, JoinCodeSummary,
+    JoinWorkspaceRequest, JoinWorkspaceResponse, MemberSummary, PublishBlipRequest,
+    PublishBlipResponse, RateLimitDecision, WorkspaceEvent,
+};
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     env,
@@ -205,7 +210,7 @@ impl CloudStore {
         })
     }
 
-    fn list_workspaces(&self) -> Result<Vec<WorkspaceSummary>, CloudError> {
+    fn list_workspaces(&self) -> Result<Vec<HostedWorkspaceSummary>, CloudError> {
         let connection = self.lock()?;
         let mut statement = connection.prepare(
             "SELECT id, name, created_by_member_id, created_at, retention_days, default_role, last_sequence
@@ -377,199 +382,14 @@ impl CloudStore {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ApiEnvelope<T> {
-    pub request_id: String,
-    pub status: String,
-    pub data: Option<T>,
-    pub error: Option<ApiError>,
-}
-
-impl<T> ApiEnvelope<T> {
-    fn ok(data: T) -> Self {
-        Self {
-            request_id: request_id(),
-            status: "ok".to_string(),
-            data: Some(data),
-            error: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ApiError {
-    pub code: String,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HealthResponse {
-    pub service: String,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CreateWorkspaceRequest {
-    pub name: String,
-    pub owner_display_name: Option<String>,
-    pub retention_days: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CreateWorkspaceResponse {
-    pub workspace: WorkspaceSummary,
-    pub member: MemberSummary,
-    pub event: WorkspaceEvent,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceSummary {
-    pub id: String,
-    pub name: String,
-    pub created_by_member_id: String,
-    pub created_at: DateTime<Utc>,
-    pub retention_days: Option<i64>,
-    pub default_role: HostedRole,
-    pub last_sequence: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MemberSummary {
-    pub id: String,
-    pub workspace_id: String,
-    pub display_name: String,
-    pub role: HostedRole,
-    pub status: String,
-    pub joined_at: DateTime<Utc>,
-}
-
-impl From<HostedMember> for MemberSummary {
-    fn from(member: HostedMember) -> Self {
-        Self {
-            id: member.id,
-            workspace_id: member.workspace_id,
-            display_name: member.display_name,
-            role: member.role,
-            status: "active".to_string(),
-            joined_at: member.joined_at,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CreateJoinCodeRequest {
-    pub created_by_member_id: String,
-    pub role: HostedRole,
-    pub expires_in_seconds: Option<i64>,
-    pub max_uses: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CreateJoinCodeResponse {
-    pub join_code: JoinCodeSummary,
-    pub raw_code: String,
-    pub event: WorkspaceEvent,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JoinCodeSummary {
-    pub id: String,
-    pub workspace_id: String,
-    pub role: HostedRole,
-    pub expires_at: DateTime<Utc>,
-    pub revoked_at: Option<DateTime<Utc>>,
-    pub max_uses: u32,
-    pub use_count: u32,
-}
-
-impl From<HostedJoinCode> for JoinCodeSummary {
-    fn from(join_code: HostedJoinCode) -> Self {
-        Self {
-            id: join_code.id,
-            workspace_id: join_code.workspace_id,
-            role: join_code.role,
-            expires_at: join_code.expires_at,
-            revoked_at: join_code.revoked_at,
-            max_uses: join_code.max_uses,
-            use_count: join_code.use_count,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JoinWorkspaceRequest {
-    pub code: String,
-    pub display_name: String,
-    pub device_label: Option<String>,
-    pub client_kind: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JoinWorkspaceResponse {
-    pub workspace: WorkspaceSummary,
-    pub member: MemberSummary,
-    pub event: WorkspaceEvent,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PublishBlipRequest {
-    pub publisher_member_id: String,
-    pub local_blip_id: String,
-    pub content_type: String,
-    pub content: String,
-    pub preview: String,
-    pub size_bytes: i64,
-    pub is_redacted: bool,
-    pub tags: Vec<String>,
-    pub captured_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PublishBlipResponse {
-    pub blip: HostedBlipSummary,
-    pub event: WorkspaceEvent,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HostedBlipSummary {
-    pub id: String,
-    pub workspace_id: String,
-    pub local_blip_id: String,
-    pub publisher_member_id: String,
-    pub content_type: String,
-    pub content: String,
-    pub preview: String,
-    pub size_bytes: i64,
-    pub is_redacted: bool,
-    pub tags: Vec<String>,
-    pub captured_at: Option<DateTime<Utc>>,
-    pub published_at: DateTime<Utc>,
-    pub sequence: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceEvent {
-    pub id: String,
-    pub workspace_id: String,
-    pub sequence: i64,
-    pub event_type: String,
-    pub actor_member_id: Option<String>,
-    pub target_id: Option<String>,
-    pub data: Value,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EventQuery {
-    #[serde(default)]
-    pub after_sequence: i64,
-}
-
 async fn health() -> Json<ApiEnvelope<HealthResponse>> {
-    Json(ApiEnvelope::ok(HealthResponse {
-        service: "blip-cloud".to_string(),
-        status: "ready".to_string(),
-    }))
+    Json(ApiEnvelope::ok(
+        request_id(),
+        HealthResponse {
+            service: "blip-cloud".to_string(),
+            status: "ready".to_string(),
+        },
+    ))
 }
 
 async fn create_workspace(
@@ -577,14 +397,18 @@ async fn create_workspace(
     Json(request): Json<CreateWorkspaceRequest>,
 ) -> Result<Json<ApiEnvelope<CreateWorkspaceResponse>>, CloudError> {
     Ok(Json(ApiEnvelope::ok(
+        request_id(),
         store.create_workspace(request, Utc::now())?,
     )))
 }
 
 async fn list_workspaces(
     State(store): State<CloudStore>,
-) -> Result<Json<ApiEnvelope<Vec<WorkspaceSummary>>>, CloudError> {
-    Ok(Json(ApiEnvelope::ok(store.list_workspaces()?)))
+) -> Result<Json<ApiEnvelope<Vec<HostedWorkspaceSummary>>>, CloudError> {
+    Ok(Json(ApiEnvelope::ok(
+        request_id(),
+        store.list_workspaces()?,
+    )))
 }
 
 async fn create_join_code(
@@ -592,11 +416,10 @@ async fn create_join_code(
     Path(workspace_id): Path<String>,
     Json(request): Json<CreateJoinCodeRequest>,
 ) -> Result<Json<ApiEnvelope<CreateJoinCodeResponse>>, CloudError> {
-    Ok(Json(ApiEnvelope::ok(store.create_join_code(
-        &workspace_id,
-        request,
-        Utc::now(),
-    )?)))
+    Ok(Json(ApiEnvelope::ok(
+        request_id(),
+        store.create_join_code(&workspace_id, request, Utc::now())?,
+    )))
 }
 
 async fn join_workspace(
@@ -604,6 +427,7 @@ async fn join_workspace(
     Json(request): Json<JoinWorkspaceRequest>,
 ) -> Result<Json<ApiEnvelope<JoinWorkspaceResponse>>, CloudError> {
     Ok(Json(ApiEnvelope::ok(
+        request_id(),
         store.join_workspace(request, Utc::now())?,
     )))
 }
@@ -613,18 +437,20 @@ async fn publish_blip(
     Path(workspace_id): Path<String>,
     Json(request): Json<PublishBlipRequest>,
 ) -> Result<Json<ApiEnvelope<PublishBlipResponse>>, CloudError> {
-    Ok(Json(ApiEnvelope::ok(store.publish_blip(
-        &workspace_id,
-        request,
-        Utc::now(),
-    )?)))
+    Ok(Json(ApiEnvelope::ok(
+        request_id(),
+        store.publish_blip(&workspace_id, request, Utc::now())?,
+    )))
 }
 
 async fn list_blips(
     State(store): State<CloudStore>,
     Path(workspace_id): Path<String>,
 ) -> Result<Json<ApiEnvelope<Vec<HostedBlipSummary>>>, CloudError> {
-    Ok(Json(ApiEnvelope::ok(store.list_blips(&workspace_id)?)))
+    Ok(Json(ApiEnvelope::ok(
+        request_id(),
+        store.list_blips(&workspace_id)?,
+    )))
 }
 
 async fn list_events(
@@ -633,6 +459,7 @@ async fn list_events(
     Query(query): Query<EventQuery>,
 ) -> Result<Json<ApiEnvelope<Vec<WorkspaceEvent>>>, CloudError> {
     Ok(Json(ApiEnvelope::ok(
+        request_id(),
         store.list_events(&workspace_id, query.after_sequence)?,
     )))
 }
@@ -752,7 +579,7 @@ fn insert_join_code(connection: &Connection, join_code: &HostedJoinCode) -> Resu
 fn workspace_by_id(
     connection: &Connection,
     workspace_id: &str,
-) -> Result<WorkspaceSummary, CloudError> {
+) -> Result<HostedWorkspaceSummary, CloudError> {
     connection
         .query_row(
             "SELECT id, name, created_by_member_id, created_at, retention_days, default_role, last_sequence
@@ -830,8 +657,8 @@ fn blip_by_id(connection: &Connection, blip_id: &str) -> Result<HostedBlipSummar
         .ok_or(CloudError::NotFound)
 }
 
-fn workspace_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceSummary> {
-    Ok(WorkspaceSummary {
+fn workspace_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HostedWorkspaceSummary> {
+    Ok(HostedWorkspaceSummary {
         id: row.get(0)?,
         name: row.get(1)?,
         created_by_member_id: row.get(2)?,
@@ -987,6 +814,7 @@ mod tests {
         body::{Body, to_bytes},
         http::{Method, Request},
     };
+    use serde::Deserialize;
     use tower::ServiceExt;
 
     async fn request_json<T: for<'de> Deserialize<'de>>(

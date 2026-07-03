@@ -1,9 +1,25 @@
+@font-face {
+  font-family: "Bedstead";
+  src: url("/fonts/bedstead.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Bedstead";
+  src: url("/fonts/bedstead-bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: light dark;
   --font-pixel-mono:
-    "Departure Mono", "Pixel Code", "Input Mono", "Berkeley Mono", "CommitMono",
-    "JetBrains Mono", "Cascadia Mono", "SF Mono", ui-monospace, SFMono-Regular,
-    Menlo, Consolas, monospace;
+    "Bedstead", "Departure Mono", "Pixel Code", "Input Mono", "Berkeley Mono",
+    "CommitMono", "JetBrains Mono", "Cascadia Mono", "SF Mono", ui-monospace,
+    SFMono-Regular, Menlo, Consolas, monospace;
   --brand-blue: #146382;
   --brand-blue-strong: #0e526c;
   --text: #20272b;
@@ -262,8 +278,12 @@ button {
   font-weight: 620;
 }
 
-.sticky-marker {
+.sticky-marker,
+.share-marker {
   width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 4px 7px;
   border: 1px solid var(--accent-border);
   border-radius: 6px;
@@ -272,6 +292,10 @@ button {
   font-size: 12px;
   line-height: 1.1;
   font-weight: 650;
+}
+
+.share-marker {
+  border-color: var(--brand-blue);
 }
 
 .workspace-header {
@@ -340,6 +364,108 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.hosted-panel {
+  max-width: 980px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.hosted-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.hosted-title > svg {
+  flex: 0 0 auto;
+  color: var(--brand-blue);
+}
+
+.hosted-title h2 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 680;
+  letter-spacing: 0;
+}
+
+.hosted-title p,
+.hosted-message {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.hosted-controls {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.hosted-controls label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.hosted-controls span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.1;
+}
+
+.hosted-controls input {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.hosted-controls input:focus {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+
+.hosted-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hosted-actions .text-button {
+  flex: 1 1 132px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hosted-message {
+  margin: 0;
+}
+
+.hosted-message.error {
+  color: var(--danger);
 }
 
 .blip-row {

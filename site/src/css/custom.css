@@ -1,8 +1,24 @@
+@font-face {
+  font-family: "Bedstead";
+  src: url("../../static/fonts/bedstead.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Bedstead";
+  src: url("../../static/fonts/bedstead-bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --font-pixel-mono:
-    "Departure Mono", "Pixel Code", "Input Mono", "Berkeley Mono", "CommitMono",
-    "JetBrains Mono", "Cascadia Mono", "SF Mono", ui-monospace, SFMono-Regular,
-    Menlo, Consolas, monospace;
+    "Bedstead", "Departure Mono", "Pixel Code", "Input Mono", "Berkeley Mono",
+    "CommitMono", "JetBrains Mono", "Cascadia Mono", "SF Mono", ui-monospace,
+    SFMono-Regular, Menlo, Consolas, monospace;
   --blip-blue: #146382;
   --blip-blue-strong: #0e526c;
   --blip-blue-soft: #e7f2f7;

@@ -124,6 +124,10 @@ enum Commands {
         #[command(subcommand)]
         command: ServiceCommands,
     },
+    Hosted {
+        #[command(subcommand)]
+        command: HostedCommands,
+    },
     AddDemo {
         workspace: String,
         content: String,
@@ -202,6 +206,36 @@ enum ServiceCommands {
         output: OutputFormat,
     },
     Logs,
+}
+
+#[derive(Debug, Subcommand)]
+enum HostedCommands {
+    Status {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
+    Join {
+        #[arg(long)]
+        service_url: String,
+        #[arg(long)]
+        code: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        device_label: Option<String>,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
+    Publish {
+        blip_id: String,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
+    StickyShare {
+        enabled: String,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
 }
 
 fn main() {
@@ -446,6 +480,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let plan = ServicePlan::from_config(&config)?;
             handle_service_command(command, &config, &plan)?;
         }
+        Commands::Hosted { command } => {
+            handle_hosted_command(command, &config)?;
+        }
         Commands::AddDemo {
             workspace,
             content,
@@ -514,6 +551,99 @@ fn handle_service_command(
             Ok(())
         }
     }
+}
+
+fn handle_hosted_command(
+    command: HostedCommands,
+    config: &BlipConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = DaemonClient::from_config(config)?;
+    match command {
+        HostedCommands::Status { output } => {
+            let status = client.hosted_status()?;
+            print_hosted_status(&status, output)
+        }
+        HostedCommands::Join {
+            service_url,
+            code,
+            name,
+            device_label,
+            output,
+        } => {
+            let status = client.hosted_join_workspace(&service_url, &code, &name, device_label)?;
+            print_hosted_status(&status, output)
+        }
+        HostedCommands::Publish { blip_id, output } => {
+            let published = client.hosted_publish_blip(&blip_id)?;
+            match output {
+                OutputFormat::Human => {
+                    println!(
+                        "published {} as {} in {} at sequence {}",
+                        published.local_blip_id,
+                        published.hosted_blip_id,
+                        published.hosted_workspace_id,
+                        published.sequence
+                    );
+                }
+                OutputFormat::Json => {
+                    serde_json::to_writer(io::stdout().lock(), &published)?;
+                    println!();
+                }
+            }
+            Ok(())
+        }
+        HostedCommands::StickyShare { enabled, output } => {
+            let enabled = parse_boolish(&enabled)?;
+            let status = client.hosted_set_sticky_share(enabled)?;
+            print_hosted_status(&status, output)
+        }
+    }
+}
+
+fn parse_boolish(value: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "on" | "yes" | "1" => Ok(true),
+        "false" | "off" | "no" | "0" => Ok(false),
+        _ => Err(format!("expected true/false, on/off, yes/no, or 1/0; got `{value}`").into()),
+    }
+}
+
+fn print_hosted_status(
+    status: &blip_api::HostedStatusResponse,
+    output: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match output {
+        OutputFormat::Human => {
+            println!(
+                "hosted: {}",
+                if status.connected {
+                    "connected"
+                } else {
+                    "not connected"
+                }
+            );
+            println!(
+                "service: {}",
+                status.service_url.as_deref().unwrap_or("none")
+            );
+            println!(
+                "workspace: {}",
+                status.workspace_name.as_deref().unwrap_or("none")
+            );
+            println!(
+                "workspace id: {}",
+                status.workspace_id.as_deref().unwrap_or("none")
+            );
+            println!("member: {}", status.member_id.as_deref().unwrap_or("none"));
+            println!("role: {}", status.member_role.as_deref().unwrap_or("none"));
+            println!("sticky share: {}", status.sticky_share_enabled);
+        }
+        OutputFormat::Json => {
+            serde_json::to_writer(io::stdout().lock(), status)?;
+            println!();
+        }
+    }
+    Ok(())
 }
 
 fn print_service_plan(
