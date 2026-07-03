@@ -10,7 +10,7 @@ use std::time::Duration;
 use tempfile::tempdir;
 
 fn blip_command(db_path: &Path) -> Command {
-    let mut cmd = Command::cargo_bin("blip-cli").expect("binary should build");
+    let mut cmd = Command::cargo_bin("blip").expect("binary should build");
     cmd.env("BLIPCOARD_DB_PATH", db_path);
     cmd
 }
