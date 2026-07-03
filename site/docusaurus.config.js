@@ -76,73 +76,12 @@ const config = {
         },
         items: [
           {
-            type: 'docSidebar',
-            sidebarId: 'docsSidebar',
-            position: 'left',
-            label: 'Docs',
-          },
-          {type: 'doc', docId: 'start/setup', label: 'Setup', position: 'left'},
-          {type: 'doc', docId: 'start/product-model', label: 'Product', position: 'left'},
-          {
-            type: 'doc',
-            docId: 'architecture/runtime-model',
-            label: 'Architecture',
-            position: 'left',
-          },
-          {
-            type: 'doc',
-            docId: 'reference/cli',
-            label: 'Reference',
-            position: 'left',
-          },
-          {
-            type: 'doc',
-            docId: 'contributor/development-workflow',
-            label: 'Contribute',
-            position: 'left',
-          },
-          {
-            href: 'https://github.com/blipcoard/blipcoard',
-            label: 'GitHub',
+            type: 'html',
             position: 'right',
+            value:
+              '<a class="navbar__item navbar__link blip-github-link" href="https://github.com/blipcoard/blipcoard" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository"></a>',
           },
         ],
-      },
-      footer: {
-        style: 'dark',
-        links: [
-          {
-            title: 'Docs',
-            items: [
-              {label: 'Overview', to: '/docs/start/overview'},
-              {label: 'One-command setup', to: '/docs/start/setup'},
-              {label: 'Product model', to: '/docs/start/product-model'},
-              {label: 'CLI operations', to: '/docs/operations/cli-operations'},
-              {label: 'Troubleshooting', to: '/docs/reference/troubleshooting'},
-              {label: 'Upgrade and migrations', to: '/docs/operations/upgrade-migrations'},
-            ],
-          },
-          {
-            title: 'Reference',
-            items: [
-              {label: 'Runtime boundary', to: '/docs/architecture/runtime-boundary'},
-              {label: 'Hosted workspaces', to: '/docs/architecture/hosted-workspaces'},
-              {label: 'Hosted threat model', to: '/docs/architecture/hosted-threat-model'},
-              {label: 'Hosted sync protocol', to: '/docs/architecture/hosted-sync-protocol'},
-              {label: 'Architecture', to: '/docs/architecture/runtime-model'},
-              {label: 'CLI reference', to: '/docs/reference/cli'},
-              {label: 'Daemon API', to: '/docs/reference/daemon-api'},
-              {label: 'Roadmap', to: '/docs/roadmap/mvp-phases'},
-            ],
-          },
-          {
-            title: 'Project',
-            items: [
-              {label: 'GitHub', href: 'https://github.com/blipcoard/blipcoard'},
-            ],
-          },
-        ],
-        copyright: `Copyright © ${new Date().getFullYear()} blipcoard contributors.`,
       },
       prism: {
         theme: prismThemes.github,
