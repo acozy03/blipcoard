@@ -1,8 +1,36 @@
 {
-  "name": "blipcoard-tooling",
-  "private": true,
+  "name": "blipcoard",
+  "version": "0.1.0",
+  "description": "Runtime-first clipboard routing for agent workflows.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blipcoard/blipcoard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/blipcoard/blipcoard/issues"
+  },
+  "homepage": "https://github.com/blipcoard/blipcoard#readme",
   "packageManager": "npm@11.16.0",
+  "bin": {
+    "blip": "npm/bin/blip.js",
+    "blipd": "npm/bin/blipd.js"
+  },
+  "files": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "LICENSE",
+    "README.md",
+    "crates/**",
+    "npm/**",
+    "services/**"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
+    "postinstall": "node npm/postinstall.js",
     "docs:start": "npm --prefix site start",
     "docs:build": "npm --prefix site run build",
     "docs:serve": "npm --prefix site run serve",
@@ -12,12 +40,24 @@
     "setup": "./scripts/setup-dev.sh",
     "hooks:install": "./scripts/setup-git-hooks.sh",
     "docs:check-search": "node scripts/check-docs-search.js",
+    "release": "semantic-release",
+    "release:build-assets": "node scripts/build-release-assets.js",
+    "release:sync-version": "node scripts/sync-release-version.js",
     "lint:pr-title": "commitlint",
     "lint:commits": "commitlint"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.1.0",
     "@commitlint/config-conventional": "^20.0.0",
-    "@playwright/test": "^1.61.1"
+    "@playwright/test": "^1.61.1",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/exec": "^7.1.0",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^12.0.9",
+    "@semantic-release/npm": "^13.1.5",
+    "@semantic-release/release-notes-generator": "^14.1.1",
+    "conventional-changelog-conventionalcommits": "^10.2.0",
+    "semantic-release": "^25.0.5"
   }
 }

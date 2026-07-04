@@ -13,6 +13,7 @@ Closes #
 - [ ] `cargo test --workspace --lib --bins --tests --locked`
 - [ ] `npm run docs:build`
 - [ ] `npm run docs:check-search`
+- [ ] `npm pack --dry-run`
 - [ ] `npm --prefix apps/desktop run build`
 - [ ] Other:
 

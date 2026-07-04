@@ -43,6 +43,7 @@ const sidebars = {
         'operations/cli-operations',
         'operations/desktop-bundles',
         'operations/hosted-deployment',
+        'operations/release-automation',
       ],
     },
     {

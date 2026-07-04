@@ -9,7 +9,8 @@ workspace policy, audit writes, and local store access.
 Supported install modes:
 
 - Full install: installs `blipd`, `blip`, and the `blipcoard` desktop app.
-- CLI-only install: installs `blipd` and `blip`.
+- CLI-only install: installs `blipd` and `blip`, including through the npm
+  package for users who want a standard package-manager update path.
 
 Unsupported install mode:
 
@@ -24,6 +25,8 @@ CLI-only install and operations details live in
 [`cli-operations.md`](cli-operations.md).
 Upgrade and migration details live in
 [`upgrade-migrations.md`](upgrade-migrations.md).
+Release automation details live in
+[`release-automation.md`](release-automation.md).
 
 ## Component Ownership
 
