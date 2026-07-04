@@ -27,6 +27,15 @@ Do not manually edit these version fields for normal releases. The release
 workflow updates them from the semantic-release result and commits the release
 metadata with `[skip ci]`.
 
+## Package Manager
+
+Release automation uses npm because the published artifact is an npm package,
+the release plugin publishes through npm registry semantics, and this repository
+tracks npm lockfiles for the root tooling, docs site, and web app. pnpm or Bun
+would be reasonable for local development later, but switching package managers
+should be a deliberate lockfile and CI migration rather than part of release
+automation.
+
 ## Required Secrets
 
 The release workflow needs:
