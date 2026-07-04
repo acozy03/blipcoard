@@ -32,6 +32,10 @@ jobs:
         with:
           node-version: "24"
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            site/package-lock.json
+            apps/web/package-lock.json
           registry-url: "https://registry.npmjs.org"
 
       - name: Install stable toolchain
@@ -41,7 +45,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci
+          npm ci --prefix site
+          npm ci --prefix apps/web
         env:
           BLIPCOARD_SKIP_POSTINSTALL: "1"
 
