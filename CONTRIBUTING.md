@@ -51,6 +51,12 @@ npm run docs:build
 npm run docs:check-search
 ```
 
+Release automation:
+
+```bash
+npm pack --dry-run
+```
+
 Desktop:
 
 ```bash

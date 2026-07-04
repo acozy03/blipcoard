@@ -45,6 +45,30 @@ Or through npm:
 npm run setup
 ```
 
+## Install With npm
+
+CLI-only users can install the current stable package from npm:
+
+```bash npm2yarn title="Install stable CLI and daemon"
+npm install -g blipcoard
+```
+
+Install the latest prerelease from `develop` with the `next` dist-tag:
+
+```bash npm2yarn title="Install next prerelease"
+npm install -g blipcoard@next
+```
+
+Update an existing global install:
+
+```bash npm2yarn title="Update global install"
+npm update -g blipcoard
+```
+
+The npm package builds `blip` and `blipd` from source during install, so Rust and
+Cargo must be available on `PATH`. Desktop bundles are still distributed
+separately from the npm CLI package.
+
 ## After Setup
 
 Check the daemon and CLI:

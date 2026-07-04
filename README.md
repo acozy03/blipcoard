@@ -18,6 +18,21 @@ Core product surfaces:
 curl -fsSL https://raw.githubusercontent.com/blipcoard/blipcoard/develop/scripts/setup-dev.sh | bash
 ```
 
+CLI-only users can install through npm:
+
+```bash
+npm install -g blipcoard
+```
+
+Prereleases from `develop` are published on the `next` dist-tag:
+
+```bash
+npm install -g blipcoard@next
+```
+
+The npm package builds `blip` and `blipd` from source during install, so Rust and
+Cargo must be available on `PATH`.
+
 Start with the design docs in [docs/architecture.md](./docs/architecture.md),
 [docs/project-breakdown.md](./docs/project-breakdown.md), and
 [docs/runtime-distribution.md](./docs/runtime-distribution.md). Desktop bundle
@@ -29,6 +44,8 @@ Upgrade and migration guidance lives in
 Documentation site architecture lives in
 [docs/docs-site-architecture.md](./docs/docs-site-architecture.md).
 The browsable documentation site source lives under [site/docs](./site/docs).
+Release automation guidance lives in
+[site/docs/operations/release-automation.md](./site/docs/operations/release-automation.md).
 
 ## Current Status
 
