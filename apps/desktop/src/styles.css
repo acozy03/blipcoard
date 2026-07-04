@@ -750,6 +750,35 @@ button {
   background: var(--surface-soft);
 }
 
+.image-preview-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  padding-bottom: 2px;
+  background: var(--surface-soft);
+}
+
+.image-preview-toolbar .secondary-button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+.image-preview-toolbar .secondary-button:hover {
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+
 .image-preview-panel img {
   display: block;
   width: auto;

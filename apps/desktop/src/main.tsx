@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import {
   AlertTriangle,
   CheckCircle2,
+  ClipboardCopy,
   Code2,
   FileQuestion,
   FileText,
@@ -1180,9 +1181,12 @@ function SafePayloadPreview({ blip }: { blip: BlipDetail }) {
 function ImagePayloadPreview({ payload, summary }: { payload: PayloadSummary; summary: string }) {
   const [state, setState] = React.useState<
     | { status: "loading" }
-    | { status: "ready"; objectUrl: string; mimeType: string | null }
+    | { status: "ready"; objectUrl: string; blob: Blob; mimeType: string | null }
     | { status: "error"; message: string }
   >({ status: "loading" });
+  const [copyState, setCopyState] = React.useState<"idle" | "copying" | "copied" | "error">(
+    "idle"
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -1195,10 +1199,12 @@ function ImagePayloadPreview({ payload, summary }: { payload: PayloadSummary; su
           return;
         }
 
-        objectUrl = createPayloadObjectUrl(response);
+        const blob = createPayloadBlob(response);
+        objectUrl = URL.createObjectURL(blob);
         setState({
           status: "ready",
           objectUrl,
+          blob,
           mimeType: response.mime_type
         });
       })
@@ -1236,20 +1242,76 @@ function ImagePayloadPreview({ payload, summary }: { payload: PayloadSummary; su
     );
   }
 
+  const copyImage = async () => {
+    if (state.status !== "ready") {
+      return;
+    }
+
+    setCopyState("copying");
+    try {
+      await writeImageBlobToClipboard(state.blob, state.mimeType);
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 1400);
+    } catch {
+      setCopyState("error");
+      window.setTimeout(() => setCopyState("idle"), 2200);
+    }
+  };
+
+  const interceptCopy = (event: React.ClipboardEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    void copyImage();
+  };
+
   return (
-    <div className="image-preview-panel">
-      <img alt={summary || "Clipboard image preview"} src={state.objectUrl} />
+    <div
+      className="image-preview-panel"
+      onCopy={interceptCopy}
+      tabIndex={0}
+      aria-label="Image payload preview"
+    >
+      <div className="image-preview-toolbar">
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={() => void copyImage()}
+          disabled={copyState === "copying"}
+        >
+          <ClipboardCopy aria-hidden="true" size={16} />
+          {copyState === "copied"
+            ? "Copied"
+            : copyState === "error"
+              ? "Copy failed"
+              : copyState === "copying"
+                ? "Copying"
+                : "Copy image"}
+        </button>
+      </div>
+      <img
+        alt={summary || "Clipboard image preview"}
+        src={state.objectUrl}
+      />
       <p>{summary || state.mimeType || payload.mime_type || "Image preview"}</p>
     </div>
   );
 }
 
-function createPayloadObjectUrl(response: PayloadBytesResponse) {
+function createPayloadBlob(response: PayloadBytesResponse) {
   const bytes = Uint8Array.from(response.bytes);
-  const blob = new Blob([bytes], {
+  return new Blob([bytes], {
     type: response.mime_type ?? "application/octet-stream"
   });
-  return URL.createObjectURL(blob);
+}
+
+async function writeImageBlobToClipboard(blob: Blob, mimeType: string | null) {
+  const clipboardItem = globalThis.ClipboardItem;
+  if (!navigator.clipboard?.write || !clipboardItem) {
+    throw new Error("image clipboard write is unavailable");
+  }
+
+  const type = mimeType && mimeType.startsWith("image/") ? mimeType : blob.type || "image/png";
+  const clipboardBlob = blob.type === type ? blob : blob.slice(0, blob.size, type);
+  await navigator.clipboard.write([new clipboardItem({ [type]: clipboardBlob })]);
 }
 
 async function getDisplayImagePayload(payloadId: string) {
