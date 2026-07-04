@@ -37,6 +37,8 @@ The release workflow needs:
 | `GITHUB_TOKEN` | Provided by GitHub Actions for tags, release notes, and release assets. |
 
 The npm package uses provenance, so the workflow also grants `id-token: write`.
+Release validation still runs when `NPM_TOKEN` is absent, but semantic-release is
+skipped until that repository secret is configured.
 
 ## Initial Bootstrap
 
