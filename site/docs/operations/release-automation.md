@@ -48,8 +48,9 @@ The release workflow needs:
 The npm package uses provenance, so the workflow also grants `id-token: write`.
 Release validation still runs when `NPM_TOKEN` is absent, but semantic-release is
 skipped until that repository secret is configured.
-Semantic-release is also skipped until a `v*` baseline tag exists, so the first
-manual npm bootstrap cannot race an automated prerelease from `develop`.
+Semantic-release is also skipped until the exact `v0.1.0` baseline tag exists,
+so the first manual npm bootstrap cannot race an automated prerelease from
+`develop`.
 
 ## Initial Bootstrap
 

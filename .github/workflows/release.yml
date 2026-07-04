@@ -72,11 +72,11 @@ jobs:
       - name: Check release baseline
         id: release-baseline
         run: |
-          if git tag --list 'v*' | grep -q .; then
+          if git tag --list 'v0.1.0' | grep -q .; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping semantic-release because no v* baseline tag exists yet."
+            echo "::notice::Skipping semantic-release because the v0.1.0 baseline tag does not exist yet."
           fi
 
       - name: Release
