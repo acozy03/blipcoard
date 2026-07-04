@@ -36,7 +36,6 @@ jobs:
             package-lock.json
             site/package-lock.json
             apps/web/package-lock.json
-          registry-url: "https://registry.npmjs.org"
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
