@@ -36,20 +36,29 @@ would be reasonable for local development later, but switching package managers
 should be a deliberate lockfile and CI migration rather than part of release
 automation.
 
-## Required Secrets
+## Trusted Publishing
 
-The release workflow needs:
+The release workflow publishes to npm through npm Trusted Publishing. Do not add
+an `NPM_TOKEN` repository secret for normal releases.
 
-| Secret | Purpose |
+Configure the npm package trusted publisher with:
+
+| Field | Value |
 | --- | --- |
-| `NPM_TOKEN` | Publishes `@cosentinode/blipcoard` to npm. |
-| `GITHUB_TOKEN` | Provided by GitHub Actions for tags, release notes, and release assets. |
+| Package | `@cosentinode/blipcoard` |
+| Publisher | GitHub Actions |
+| Repository owner | `blipcoard` |
+| Repository name | `blipcoard` |
+| Workflow filename | `release.yml` |
+| Environment | Leave blank unless the workflow later adds one. |
 
-The npm package uses provenance, so the workflow also grants `id-token: write`.
-Release validation still runs when `NPM_TOKEN` is absent, but semantic-release is
-skipped until that repository secret is configured.
-Semantic-release is also skipped until a `v*` baseline tag exists, so the first
-manual npm bootstrap cannot race an automated prerelease from `develop`.
+GitHub provides `GITHUB_TOKEN` automatically for tags, release notes, and release
+assets. The workflow grants `id-token: write` so npm can verify the GitHub
+Actions identity and publish with provenance.
+
+Release validation still runs before publishing. Semantic-release is skipped
+until a `v*` baseline tag exists, so the first manual npm bootstrap cannot race
+an automated prerelease from `develop`.
 
 ## Initial Bootstrap
 
