@@ -21,13 +21,13 @@ curl -fsSL https://raw.githubusercontent.com/blipcoard/blipcoard/develop/scripts
 CLI-only users can install through npm:
 
 ```bash
-npm install -g blipcoard
+npm install -g @cosentinode/blipcoard
 ```
 
 Prereleases from `develop` are published on the `next` dist-tag:
 
 ```bash
-npm install -g blipcoard@next
+npm install -g @cosentinode/blipcoard@next
 ```
 
 The npm package builds `blip` and `blipd` from source during install, so Rust and

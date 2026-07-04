@@ -34,7 +34,7 @@ const cargoCheck = spawnSync('cargo', ['--version'], {
 
 if (cargoCheck.error || cargoCheck.status !== 0) {
   console.error('Installing blipcoard from npm requires Rust and Cargo on PATH.');
-  console.error('Install Rust from https://rustup.rs/ and run npm install -g blipcoard again.');
+  console.error('Install Rust from https://rustup.rs/ and run npm install -g @cosentinode/blipcoard again.');
   process.exit(1);
 }
 

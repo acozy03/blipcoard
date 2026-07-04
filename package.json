@@ -1,6 +1,6 @@
 {
-  "name": "blipcoard",
-  "version": "1.0.0-next.1",
+  "name": "@cosentinode/blipcoard",
+  "version": "0.1.0",
   "description": "Runtime-first clipboard routing for agent workflows.",
   "license": "MIT",
   "repository": {
