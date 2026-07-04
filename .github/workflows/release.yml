@@ -57,18 +57,6 @@ jobs:
           npm run docs:build
           npm run web:build
 
-      - name: Check npm release token
-        id: npm-token
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -n "${NPM_TOKEN}" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping semantic-release because the NPM_TOKEN repository secret is not configured."
-          fi
-
       - name: Check release baseline
         id: release-baseline
         run: |
@@ -80,8 +68,7 @@ jobs:
           fi
 
       - name: Release
-        if: steps.npm-token.outputs.available == 'true' && steps.release-baseline.outputs.available == 'true'
+        if: steps.release-baseline.outputs.available == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm run release
