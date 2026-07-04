@@ -69,8 +69,18 @@ jobs:
             echo "::notice::Skipping semantic-release because the NPM_TOKEN repository secret is not configured."
           fi
 
+      - name: Check release baseline
+        id: release-baseline
+        run: |
+          if git tag --list 'v*' | grep -q .; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping semantic-release because no v* baseline tag exists yet."
+          fi
+
       - name: Release
-        if: steps.npm-token.outputs.available == 'true'
+        if: steps.npm-token.outputs.available == 'true' && steps.release-baseline.outputs.available == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,7 +1,7 @@
 # Release Automation
 
-`blipcoard` uses semantic-release for lockstep versioning across the npm package
-and Rust workspace packages.
+`blipcoard` uses semantic-release for lockstep versioning across the
+`@cosentinode/blipcoard` npm package and Rust workspace packages.
 
 ## Channels
 
@@ -42,12 +42,14 @@ The release workflow needs:
 
 | Secret | Purpose |
 | --- | --- |
-| `NPM_TOKEN` | Publishes `blipcoard` to npm. |
+| `NPM_TOKEN` | Publishes `@cosentinode/blipcoard` to npm. |
 | `GITHUB_TOKEN` | Provided by GitHub Actions for tags, release notes, and release assets. |
 
 The npm package uses provenance, so the workflow also grants `id-token: write`.
 Release validation still runs when `NPM_TOKEN` is absent, but semantic-release is
 skipped until that repository secret is configured.
+Semantic-release is also skipped until a `v*` baseline tag exists, so the first
+manual npm bootstrap cannot race an automated prerelease from `develop`.
 
 ## Initial Bootstrap
 
