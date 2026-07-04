@@ -34,3 +34,7 @@ Environment:
 The MVP uses SQLite for a self-hosted durable service. Phase 11.8 owns the
 production deployment and cost model, including whether managed deployments move
 metadata to Postgres.
+
+Operational guidance lives in the docs site:
+
+- `site/docs/operations/hosted-deployment.md`

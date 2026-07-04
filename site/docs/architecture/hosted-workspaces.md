@@ -235,7 +235,8 @@ The next Phase 11 issues should decide:
   [Hosted sync protocol](./hosted-sync-protocol.md)
 - join code entropy, expiry, revocation, and rate limits
 - hosted blob size limits and retention
-- deployment environments, cost model, backups, and incident procedures
+- deployment environments, cost model, backups, and incident procedures from
+  [Hosted deployment and operations](../operations/hosted-deployment.md)
 
 Those decisions should keep the invariant from this document: local capture is
 daemon-owned, and hosted sharing is explicit or visibly opt-in.

@@ -42,6 +42,7 @@ const sidebars = {
         'operations/upgrade-migrations',
         'operations/cli-operations',
         'operations/desktop-bundles',
+        'operations/hosted-deployment',
       ],
     },
     {
