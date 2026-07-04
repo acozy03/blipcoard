@@ -196,7 +196,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blip-api"
-version = "1.0.0-next.2"
+version = "1.0.0-next.3"
 dependencies = [
  "chrono",
  "serde",
@@ -205,7 +205,7 @@ dependencies = [
 
 [[package]]
 name = "blip-cli"
-version = "1.0.0-next.2"
+version = "1.0.0-next.3"
 dependencies = [
  "assert_cmd",
  "blip-api",
@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "blip-clipboard"
-version = "1.0.0-next.2"
+version = "1.0.0-next.3"
 dependencies = [
  "arboard",
  "image",
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "blip-cloud"
-version = "1.0.0-next.2"
+version = "1.0.0-next.3"
 dependencies = [
  "axum",
  "blip-sync",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "blip-config"
-version = "1.0.0-next.2"
+version = "1.0.0-next.3"
 dependencies = [
  "directories",
  "serde",
@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "blip-core"
-version = "1.0.0-next.2"
+version = "1.0.0-next.3"
 dependencies = [
  "chrono",
  "fs2",
@@ -271,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "blip-daemon"
-version = "1.0.0-next.2"
+version = "1.0.0-next.3"
 dependencies = [
  "blip-api",
  "blip-clipboard",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "blip-sync"
-version = "1.0.0-next.2"
+version = "1.0.0-next.3"
 dependencies = [
  "chrono",
  "reqwest",
