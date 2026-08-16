@@ -18,6 +18,7 @@ blip-sync = { path = "../blip-sync" }
 chrono.workspace = true
 image.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 
 [lints]

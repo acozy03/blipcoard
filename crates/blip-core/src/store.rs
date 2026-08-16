@@ -1,15 +1,16 @@
 use crate::LocalBlobStore;
 use crate::domain::{
-    ActorType, AuditEvent, AuditEventType, Blip, BlipMove, BlipSummary, ClipboardPayload,
-    ClipboardPayloadSummary, ContentType, NewBlip, NewClipboardMetadataPayload,
-    NewClipboardPayload, NewWorkspace, PayloadAccessAudit, PayloadKind, RetentionCleanupReport,
-    RichPayloadVisibility, Workspace, WorkspacePolicy,
+    ActorType, AuditEvent, AuditEventType, Blip, BlipListFilter, BlipMove, BlipSummary,
+    BlipSummaryPage, ClipboardPayload, ClipboardPayloadSummary, ContentType, NewBlip,
+    NewClipboardMetadataPayload, NewClipboardPayload, NewWorkspace, PayloadAccessAudit,
+    PayloadKind, RetentionCleanupReport, RichPayloadVisibility, Workspace, WorkspacePolicy,
 };
 use crate::error::{BlipError, is_sqlite_busy_error};
 use crate::secrets::add_secret_tags;
 use crate::typing::{add_type_tag, resolved_content_type};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::thread;
@@ -24,7 +25,59 @@ const DEFAULT_PAYLOAD_INLINE_PREVIEW_CHARS: i64 = 4096;
 const BUSY_RETRY_ATTEMPTS: usize = 5;
 const BUSY_RETRY_DELAY: Duration = Duration::from_millis(25);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
-const SCHEMA_VERSION: i32 = 7;
+const SCHEMA_VERSION: i32 = 8;
+const PENDING_CLIPBOARD_SUPPRESSION_KEY: &str = "pending_clipboard_suppression";
+const FILTERED_BLIPS_CTE: &str = r#"
+    WITH blips_with_primary_payload AS (
+        SELECT blips.*,
+               blips.rowid AS blip_rowid,
+               (
+                   SELECT payload_kind
+                   FROM blip_payloads
+                   WHERE blip_id = blips.id
+                   ORDER BY CASE WHEN payload_kind = 'text' THEN 1 ELSE 0 END,
+                            created_at ASC,
+                            id ASC
+                   LIMIT 1
+               ) AS primary_payload_kind
+        FROM blips
+    ),
+    classified_blips AS (
+        SELECT *,
+               CASE
+                   WHEN primary_payload_kind = 'image' THEN 'image'
+                   WHEN primary_payload_kind = 'file_list' THEN 'file_list'
+                   WHEN primary_payload_kind IN ('html', 'rtf') THEN 'rich_text'
+                   WHEN primary_payload_kind = 'unknown' THEN 'unknown'
+                   WHEN primary_payload_kind IS NOT NULL THEN 'text'
+                   WHEN EXISTS (
+                       SELECT 1 FROM json_each(tags_json)
+                       WHERE lower(value) = 'clipboard:image'
+                   ) OR lower(content) LIKE 'image clipboard payload%' THEN 'image'
+                   WHEN EXISTS (
+                       SELECT 1 FROM json_each(tags_json)
+                       WHERE lower(value) IN ('clipboard:file-list', 'clipboard:file')
+                   ) OR lower(content) LIKE 'file-list clipboard payload%' THEN 'file_list'
+                   WHEN EXISTS (
+                       SELECT 1 FROM json_each(tags_json)
+                       WHERE lower(value) IN ('clipboard:html', 'clipboard:rtf')
+                   ) OR lower(content_type) IN ('html', 'rtf', 'text/html', 'text/rtf')
+                       THEN 'rich_text'
+                   WHEN EXISTS (
+                       SELECT 1 FROM json_each(tags_json)
+                       WHERE lower(value) = 'clipboard:unknown'
+                   ) OR lower(content) LIKE 'unknown clipboard payload%' THEN 'unknown'
+                   ELSE 'text'
+               END AS blip_type
+        FROM blips_with_primary_payload
+    )
+"#;
+const FILTERED_BLIPS_WHERE: &str = r#"
+    WHERE (?1 OR workspace_name = ?2)
+      AND (?3 IS NULL OR julianday(created_at) >= julianday(?3))
+      AND (?4 IS NULL OR julianday(created_at) < julianday(?4))
+      AND (?5 = '[]' OR blip_type IN (SELECT value FROM json_each(?5)))
+"#;
 
 struct Migration {
     version: i32,
@@ -60,7 +113,17 @@ const MIGRATIONS: &[Migration] = &[
         version: 7,
         sql: include_str!("sql/007_hosted_audit_events.sql"),
     },
+    Migration {
+        version: 8,
+        sql: include_str!("sql/008_blip_recopy.sql"),
+    },
 ];
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PendingClipboardSuppression {
+    fingerprint: String,
+    expires_at: DateTime<Utc>,
+}
 
 pub struct BlipStore {
     conn: Connection,
@@ -199,6 +262,39 @@ impl BlipStore {
 
         tx.commit()?;
         Ok(created)
+    }
+
+    pub fn set_agent_access(&mut self, name: &str, enabled: bool) -> Result<Workspace, BlipError> {
+        self.with_busy_retry(|store| store.set_agent_access_once(name, enabled))
+    }
+
+    fn set_agent_access_once(&mut self, name: &str, enabled: bool) -> Result<Workspace, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        if Self::get_workspace_from(&tx, name)?.is_none() {
+            return Err(BlipError::WorkspaceNotFound(name.to_owned()));
+        }
+
+        tx.execute(
+            "UPDATE workspaces SET agent_access = ?2 WHERE name = ?1",
+            rusqlite::params![name, enabled],
+        )?;
+        Self::insert_audit_event(
+            &tx,
+            ActorType::User,
+            None,
+            AuditEventType::WorkspacePolicyChanged,
+            None,
+            Some(name.to_owned()),
+            Some(serde_json::json!({ "agent_access": enabled }).to_string()),
+        )?;
+
+        let workspace = Self::get_workspace_from(&tx, name)?
+            .ok_or_else(|| BlipError::WorkspaceNotFound(name.to_owned()))?;
+        tx.commit()?;
+        Ok(workspace)
     }
 
     pub fn list_workspaces(&self) -> Result<Vec<Workspace>, BlipError> {
@@ -468,8 +564,8 @@ impl BlipStore {
         tx.execute(
             "INSERT INTO blips (
                 id, workspace_name, source_app, content_type, language, content, size_bytes,
-                token_estimate, is_redacted, tags_json, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                token_estimate, is_redacted, tags_json, created_at, sort_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
             params![
                 id,
                 new_blip.workspace_name,
@@ -502,6 +598,106 @@ impl BlipStore {
 
         tx.commit()?;
         Ok(blip)
+    }
+
+    pub fn prepare_blip_recopy(
+        &mut self,
+        id: &str,
+        fingerprint: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<Blip, BlipError> {
+        if fingerprint.len() > 160
+            || !(fingerprint.starts_with("text:") || fingerprint.starts_with("image:"))
+        {
+            return Err(BlipError::InvalidInput {
+                field: "clipboard_fingerprint",
+                reason: "must be a text or image fingerprint of at most 160 bytes",
+            });
+        }
+        self.with_busy_retry(|store| store.prepare_blip_recopy_once(id, fingerprint, expires_at))
+    }
+
+    fn prepare_blip_recopy_once(
+        &mut self,
+        id: &str,
+        fingerprint: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<Blip, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let blip =
+            Self::get_blip_from(&tx, id)?.ok_or_else(|| BlipError::BlipNotFound(id.to_owned()))?;
+        tx.execute(
+            "UPDATE blips SET sort_at = ?1 WHERE id = ?2",
+            params![Utc::now(), id],
+        )?;
+        let suppression = serde_json::to_string(&PendingClipboardSuppression {
+            fingerprint: fingerprint.to_owned(),
+            expires_at,
+        })?;
+        tx.execute(
+            "INSERT INTO app_state(key, value) VALUES(?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![PENDING_CLIPBOARD_SUPPRESSION_KEY, suppression],
+        )?;
+        Self::insert_audit_event(
+            &tx,
+            ActorType::User,
+            None,
+            AuditEventType::BlipRecopied,
+            Some(id.to_owned()),
+            Some(blip.workspace_name.clone()),
+            None,
+        )?;
+        tx.commit()?;
+        Ok(blip)
+    }
+
+    pub fn consume_clipboard_suppression(
+        &mut self,
+        fingerprint: &str,
+        observed_at: DateTime<Utc>,
+    ) -> Result<bool, BlipError> {
+        self.with_busy_retry(|store| {
+            store.consume_clipboard_suppression_once(fingerprint, observed_at)
+        })
+    }
+
+    fn consume_clipboard_suppression_once(
+        &mut self,
+        fingerprint: &str,
+        observed_at: DateTime<Utc>,
+    ) -> Result<bool, BlipError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let value = tx
+            .query_row(
+                "SELECT value FROM app_state WHERE key = ?1",
+                [PENDING_CLIPBOARD_SUPPRESSION_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(value) = value else {
+            tx.commit()?;
+            return Ok(false);
+        };
+        let pending = serde_json::from_str::<PendingClipboardSuppression>(&value).ok();
+        let matches = pending.as_ref().is_some_and(|pending| {
+            pending.expires_at >= observed_at && pending.fingerprint == fingerprint
+        });
+        if matches
+            || pending.is_none()
+            || pending.is_some_and(|pending| pending.expires_at < observed_at)
+        {
+            tx.execute(
+                "DELETE FROM app_state WHERE key = ?1",
+                [PENDING_CLIPBOARD_SUPPRESSION_KEY],
+            )?;
+        }
+        tx.commit()?;
+        Ok(matches)
     }
 
     pub fn get_blip(&self, id: &str) -> Result<Option<Blip>, BlipError> {
@@ -1116,7 +1312,7 @@ impl BlipStore {
                     token_estimate, is_redacted, tags_json, created_at
              FROM blips
              WHERE workspace_name = ?1
-             ORDER BY created_at DESC, rowid DESC
+             ORDER BY COALESCE(sort_at, created_at) DESC, rowid DESC
              LIMIT ?2",
         )?;
 
@@ -1135,32 +1331,114 @@ impl BlipStore {
         workspace_name: &str,
         limit: usize,
     ) -> Result<Vec<BlipSummary>, BlipError> {
+        self.list_blip_summaries_page(workspace_name, limit, 0)
+    }
+
+    pub fn list_blip_summaries_page(
+        &self,
+        workspace_name: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<BlipSummary>, BlipError> {
+        Ok(self
+            .list_blip_summaries_filtered_page(
+                workspace_name,
+                &BlipListFilter::default(),
+                limit,
+                offset,
+            )?
+            .blips)
+    }
+
+    pub fn list_blip_summaries_filtered_page(
+        &self,
+        workspace_name: &str,
+        filter: &BlipListFilter,
+        limit: usize,
+        offset: usize,
+    ) -> Result<BlipSummaryPage, BlipError> {
         if self.get_workspace(workspace_name)?.is_none() {
             return Err(BlipError::WorkspaceNotFound(workspace_name.to_owned()));
         }
 
-        let mut stmt = self.conn.prepare(
-            "SELECT id, workspace_name, source_app, content_type, language,
-                    substr(content, 1, ?2), size_bytes, token_estimate, is_redacted, tags_json,
-                    created_at
-             FROM blips
-             WHERE workspace_name = ?1
-             ORDER BY created_at DESC, rowid DESC
-             LIMIT ?3",
+        let created_at_from = filter.created_at_from.map(|value| value.to_rfc3339());
+        let created_at_before = filter.created_at_before.map(|value| value.to_rfc3339());
+        let blip_types = serde_json::to_string(
+            &filter
+                .blip_types
+                .iter()
+                .map(|blip_type| blip_type.as_str())
+                .collect::<Vec<_>>(),
         )?;
+        let transaction = self.conn.unchecked_transaction()?;
+        let count_sql = format!(
+            "{FILTERED_BLIPS_CTE} SELECT COUNT(*) FROM classified_blips {FILTERED_BLIPS_WHERE}"
+        );
+        let count = transaction.query_row(
+            &count_sql,
+            params![
+                filter.all_workspaces,
+                workspace_name,
+                created_at_from,
+                created_at_before,
+                blip_types
+            ],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let page_sql = format!(
+            "{FILTERED_BLIPS_CTE}
+             SELECT id, workspace_name, source_app, content_type, language,
+                    substr(content, 1, ?6), size_bytes, token_estimate, is_redacted, tags_json,
+                    created_at
+             FROM classified_blips
+             {FILTERED_BLIPS_WHERE}
+             ORDER BY COALESCE(sort_at, created_at) DESC, blip_rowid DESC
+             LIMIT ?7 OFFSET ?8"
+        );
+        let summaries = {
+            let mut stmt = transaction.prepare(&page_sql)?;
+            let mut rows = stmt.query(params![
+                filter.all_workspaces,
+                workspace_name,
+                created_at_from,
+                created_at_before,
+                blip_types,
+                DEFAULT_BLIP_PREVIEW_CHARS,
+                sqlite_limit(limit),
+                sqlite_offset(offset)
+            ])?;
+            let mut summaries = Vec::new();
+            while let Some(row) = rows.next()? {
+                summaries.push(map_blip_summary_row(row)?);
+            }
+            summaries
+        };
+        transaction.commit()?;
+        let total = usize::try_from(count).map_err(|_| BlipError::InvalidPersistedValue {
+            field: "blip_count",
+            value: count.to_string(),
+        })?;
 
-        let mut rows = stmt.query(params![
-            workspace_name,
-            DEFAULT_BLIP_PREVIEW_CHARS,
-            sqlite_limit(limit)
-        ])?;
-        let mut summaries = Vec::new();
+        Ok(BlipSummaryPage {
+            blips: summaries,
+            total,
+        })
+    }
 
-        while let Some(row) = rows.next()? {
-            summaries.push(map_blip_summary_row(row)?);
+    pub fn count_blips(&self, workspace_name: &str) -> Result<usize, BlipError> {
+        if self.get_workspace(workspace_name)?.is_none() {
+            return Err(BlipError::WorkspaceNotFound(workspace_name.to_owned()));
         }
 
-        Ok(summaries)
+        let count = self.conn.query_row(
+            "SELECT COUNT(*) FROM blips WHERE workspace_name = ?1",
+            [workspace_name],
+            |row| row.get::<_, i64>(0),
+        )?;
+        usize::try_from(count).map_err(|_| BlipError::InvalidPersistedValue {
+            field: "blip_count",
+            value: count.to_string(),
+        })
     }
 
     pub fn search_blip_summaries(
@@ -1374,9 +1652,9 @@ impl BlipStore {
         let id = tx
             .query_row(
                 "SELECT id FROM blips
-                 WHERE workspace_name = ?1
-                 ORDER BY created_at DESC, rowid DESC
-                 LIMIT 1",
+                  WHERE workspace_name = ?1
+                  ORDER BY COALESCE(sort_at, created_at) DESC, rowid DESC
+                  LIMIT 1",
                 [INBOX_WORKSPACE],
                 |row| row.get::<_, String>(0),
             )
@@ -1825,6 +2103,10 @@ fn map_payload_summary_row(row: &rusqlite::Row<'_>) -> Result<ClipboardPayloadSu
 
 fn sqlite_limit(limit: usize) -> i64 {
     i64::try_from(limit.min(MAX_LIST_LIMIT)).unwrap_or(MAX_LIST_LIMIT as i64)
+}
+
+fn sqlite_offset(offset: usize) -> i64 {
+    i64::try_from(offset).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]
@@ -2816,6 +3098,61 @@ mod tests {
     }
 
     #[test]
+    fn agent_access_changes_are_immediate_and_audited() {
+        let mut store = store_with_workspace("auth-bug");
+
+        let denied = store
+            .list_agent_blips("auth-bug", 50)
+            .expect_err("human-only workspace should deny agent reads");
+        assert!(matches!(
+            denied,
+            BlipError::AgentAccessDenied(workspace) if workspace == "auth-bug"
+        ));
+
+        let enabled = store
+            .set_agent_access("auth-bug", true)
+            .expect("agent access should enable");
+        assert!(enabled.agent_access);
+        store
+            .list_agent_blips("auth-bug", 50)
+            .expect("enabled workspace should allow agent reads");
+
+        let disabled = store
+            .set_agent_access("auth-bug", false)
+            .expect("agent access should disable");
+        assert!(!disabled.agent_access);
+        assert!(matches!(
+            store.list_agent_blips("auth-bug", 50),
+            Err(BlipError::AgentAccessDenied(workspace)) if workspace == "auth-bug"
+        ));
+
+        let audit_events = store.list_audit_events().expect("audit list should work");
+        assert!(audit_events.iter().any(|event| {
+            event.actor_type == ActorType::User
+                && event.event_type == AuditEventType::WorkspacePolicyChanged
+                && event.target_workspace.as_deref() == Some("auth-bug")
+                && event
+                    .details_json
+                    .as_deref()
+                    .is_some_and(|details| details.contains("\"agent_access\":false"))
+        }));
+    }
+
+    #[test]
+    fn set_agent_access_rejects_missing_workspace() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+
+        let error = store
+            .set_agent_access("missing", true)
+            .expect_err("missing workspace should fail");
+
+        assert!(matches!(
+            error,
+            BlipError::WorkspaceNotFound(workspace) if workspace == "missing"
+        ));
+    }
+
+    #[test]
     fn workspace_policy_defaults_deny_agent_raw_payload_access() {
         let mut store = BlipStore::in_memory().expect("store should initialize");
         store
@@ -3454,6 +3791,98 @@ mod tests {
     }
 
     #[test]
+    fn filtered_blip_pages_apply_scope_date_and_type_before_pagination() {
+        let root = temp_blob_root("filtered-blip-pages");
+        let blob_store = LocalBlobStore::with_max_blob_bytes(&root, 1024);
+        let mut store = store_with_workspace("auth-bug");
+        let old_text = insert_test_blip(&mut store, "old text");
+        let image = insert_test_blip_in_workspace(&mut store, "auth-bug", "image placeholder");
+        let file_list = insert_test_blip(&mut store, "file placeholder");
+        let boundary_image =
+            insert_test_blip_in_workspace(&mut store, "auth-bug", "boundary image");
+
+        store
+            .insert_blob_payload(&image.id, &image_payload(b"image one"), &blob_store)
+            .expect("image payload should insert");
+        store
+            .insert_metadata_payload(
+                &file_list.id,
+                &NewClipboardMetadataPayload {
+                    kind: PayloadKind::FileList,
+                    mime_type: Some("text/uri-list".to_owned()),
+                    platform_format: None,
+                    source_app: None,
+                    preview_ref: None,
+                    inline_text: None,
+                    metadata: serde_json::json!({ "policy": "metadata_only" }),
+                    byte_size: 10,
+                },
+            )
+            .expect("file-list payload should insert");
+        store
+            .insert_blob_payload(
+                &boundary_image.id,
+                &image_payload(b"image two"),
+                &blob_store,
+            )
+            .expect("boundary image payload should insert");
+
+        for (id, created_at) in [
+            (&old_text.id, "2026-08-10T09:00:00Z"),
+            (&image.id, "2026-08-10T10:00:00Z"),
+            (&file_list.id, "2026-08-10T11:00:00Z"),
+            (&boundary_image.id, "2026-08-10T12:00:00Z"),
+        ] {
+            store
+                .connection()
+                .execute(
+                    "UPDATE blips SET created_at = ?1, sort_at = NULL WHERE id = ?2",
+                    params![created_at, id],
+                )
+                .expect("test timestamp should update");
+        }
+        store
+            .connection()
+            .execute(
+                "UPDATE blips SET sort_at = '2026-08-10T13:00:00Z' WHERE id = ?1",
+                [&image.id],
+            )
+            .expect("test recency should update");
+
+        let filter = BlipListFilter {
+            all_workspaces: true,
+            created_at_from: Some(
+                "2026-08-10T10:00:00Z"
+                    .parse()
+                    .expect("from timestamp should parse"),
+            ),
+            created_at_before: Some(
+                "2026-08-10T12:00:00Z"
+                    .parse()
+                    .expect("before timestamp should parse"),
+            ),
+            blip_types: vec![
+                crate::BlipTypeFilter::Image,
+                crate::BlipTypeFilter::FileList,
+            ],
+        };
+        let first_page = store
+            .list_blip_summaries_filtered_page("inbox", &filter, 1, 0)
+            .expect("first filtered page should list");
+        let second_page = store
+            .list_blip_summaries_filtered_page("inbox", &filter, 1, 1)
+            .expect("second filtered page should list");
+
+        assert_eq!(first_page.total, 2);
+        assert_eq!(first_page.blips[0].id, image.id);
+        assert_eq!(first_page.blips[0].workspace_name, "auth-bug");
+        assert_eq!(second_page.total, 2);
+        assert_eq!(second_page.blips[0].id, file_list.id);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn blip_and_audit_list_queries_are_bounded() {
         let mut store = BlipStore::in_memory().expect("store should initialize");
         let long_content = format!("{}{}", "a".repeat(90), "tail");
@@ -3488,6 +3917,16 @@ mod tests {
                 .iter()
                 .all(|summary| !summary.preview.contains("tail"))
         );
+        let next_page = store
+            .list_blip_summaries_page("inbox", 2, 2)
+            .expect("summary page should work");
+        assert_eq!(next_page.len(), 1);
+        assert!(
+            summaries
+                .iter()
+                .all(|summary| summary.id != next_page[0].id)
+        );
+        assert_eq!(store.count_blips("inbox").expect("count should work"), 3);
 
         let audit_events = store
             .list_audit_events_limited(1)
@@ -3495,6 +3934,75 @@ mod tests {
         assert_eq!(audit_events.len(), 1);
 
         assert_eq!(sqlite_limit(usize::MAX), MAX_LIST_LIMIT as i64);
+        assert_eq!(sqlite_offset(usize::MAX), i64::MAX);
+    }
+
+    #[test]
+    fn recopy_promotes_existing_blip_and_consumes_matching_suppression() {
+        let mut store = BlipStore::in_memory().expect("store should initialize");
+        let first = store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".to_owned(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "first".to_owned(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("first blip should insert");
+        store
+            .insert_blip(&NewBlip {
+                workspace_name: "inbox".to_owned(),
+                source_app: None,
+                content_type: ContentType::PlainText,
+                language: None,
+                content: "second".to_owned(),
+                token_estimate: None,
+                is_redacted: false,
+                tags: Vec::new(),
+            })
+            .expect("second blip should insert");
+
+        let original_created_at = first.created_at;
+        store
+            .prepare_blip_recopy(
+                &first.id,
+                "text:abc123",
+                Utc::now() + chrono::Duration::seconds(5),
+            )
+            .expect("recopy should prepare");
+
+        let blips = store.list_blips("inbox").expect("blips should list");
+        assert_eq!(blips.len(), 2);
+        assert_eq!(blips[0].id, first.id);
+        assert_eq!(blips[0].created_at, original_created_at);
+        assert!(
+            !store
+                .consume_clipboard_suppression("text:different", Utc::now())
+                .expect("nonmatching suppression should check")
+        );
+        assert!(
+            store
+                .consume_clipboard_suppression("text:abc123", Utc::now())
+                .expect("matching suppression should be consumed")
+        );
+        assert!(
+            !store
+                .consume_clipboard_suppression("text:abc123", Utc::now())
+                .expect("suppression should only be consumed once")
+        );
+        assert!(
+            store
+                .list_audit_events()
+                .expect("audit events should list")
+                .iter()
+                .any(|event| {
+                    event.event_type == AuditEventType::BlipRecopied
+                        && event.target_blip_id.as_deref() == Some(first.id.as_str())
+                })
+        );
     }
 
     #[test]

@@ -135,6 +135,7 @@ mod platform {
     use blip_api::{DaemonRequest, DaemonResponse};
     use std::fs;
     use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::fs::FileTypeExt;
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::Path;
 
@@ -206,6 +207,15 @@ mod platform {
     }
 
     fn remove_stale_socket_if_present(socket_path: &Path) -> Result<(), IpcError> {
+        match fs::symlink_metadata(socket_path) {
+            Ok(metadata) if !metadata.file_type().is_socket() => {
+                return remove_socket_file(socket_path);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(IpcError::Io(error)),
+        }
+
         match UnixStream::connect(socket_path) {
             Ok(_) => Err(IpcError::AlreadyRunning {
                 socket_path: socket_path.to_owned(),

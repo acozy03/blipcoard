@@ -78,6 +78,42 @@ pub struct BlipSummary {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlipTypeFilter {
+    Text,
+    Image,
+    FileList,
+    RichText,
+    Unknown,
+}
+
+impl BlipTypeFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Image => "image",
+            Self::FileList => "file_list",
+            Self::RichText => "rich_text",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct BlipListFilter {
+    pub all_workspaces: bool,
+    pub created_at_from: Option<DateTime<Utc>>,
+    pub created_at_before: Option<DateTime<Utc>>,
+    pub blip_types: Vec<BlipTypeFilter>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlipSummaryPage {
+    pub blips: Vec<BlipSummary>,
+    pub total: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlipMove {
     pub id: String,
@@ -328,6 +364,7 @@ pub enum AuditEventType {
     StickyCaptureChanged,
     WorkspacePolicyChanged,
     BlipIngested,
+    BlipRecopied,
     BlipMoved,
     BlipsRead,
     RichPayloadCaptureSkipped,
@@ -349,6 +386,7 @@ impl AuditEventType {
             Self::StickyCaptureChanged => "sticky_capture_changed",
             Self::WorkspacePolicyChanged => "workspace_policy_changed",
             Self::BlipIngested => "blip_ingested",
+            Self::BlipRecopied => "blip_recopied",
             Self::BlipMoved => "blip_moved",
             Self::BlipsRead => "blips_read",
             Self::RichPayloadCaptureSkipped => "rich_payload_capture_skipped",
@@ -370,6 +408,7 @@ impl AuditEventType {
             "sticky_capture_changed" => Ok(Self::StickyCaptureChanged),
             "workspace_policy_changed" => Ok(Self::WorkspacePolicyChanged),
             "blip_ingested" => Ok(Self::BlipIngested),
+            "blip_recopied" => Ok(Self::BlipRecopied),
             "blip_moved" => Ok(Self::BlipMoved),
             "blips_read" => Ok(Self::BlipsRead),
             "rich_payload_capture_skipped" => Ok(Self::RichPayloadCaptureSkipped),

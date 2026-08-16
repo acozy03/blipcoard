@@ -4,6 +4,34 @@ use serde_json::Value;
 
 pub const DAEMON_API_VERSION: u16 = 1;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlipTypeFilter {
+    Text,
+    Image,
+    FileList,
+    RichText,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct BlipListFilters {
+    #[serde(default)]
+    pub all_workspaces: bool,
+    #[serde(default)]
+    pub created_at_from: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub created_at_before: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub blip_types: Vec<BlipTypeFilter>,
+}
+
+impl BlipListFilters {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub service: String,
@@ -43,6 +71,8 @@ pub enum DaemonCommand {
     Version,
     CurrentWorkspace,
     ActivateWorkspace,
+    CreateWorkspace,
+    SetAgentAccess,
     SetStickyCapture,
     SetWorkspacePolicy,
     ListWorkspaces,
@@ -55,6 +85,7 @@ pub enum DaemonCommand {
     ListAuditEvents,
     RouteBlip,
     RouteLatestInboxBlip,
+    RecopyBlip,
     HostedStatus,
     HostedJoinWorkspace,
     HostedPublishBlip,
@@ -71,6 +102,8 @@ impl DaemonCommand {
             Self::Version => "version",
             Self::CurrentWorkspace => "current_workspace",
             Self::ActivateWorkspace => "activate_workspace",
+            Self::CreateWorkspace => "create_workspace",
+            Self::SetAgentAccess => "set_agent_access",
             Self::SetStickyCapture => "set_sticky_capture",
             Self::SetWorkspacePolicy => "set_workspace_policy",
             Self::ListWorkspaces => "list_workspaces",
@@ -83,6 +116,7 @@ impl DaemonCommand {
             Self::ListAuditEvents => "list_audit_events",
             Self::RouteBlip => "route_blip",
             Self::RouteLatestInboxBlip => "route_latest_inbox_blip",
+            Self::RecopyBlip => "recopy_blip",
             Self::HostedStatus => "hosted_status",
             Self::HostedJoinWorkspace => "hosted_join_workspace",
             Self::HostedPublishBlip => "hosted_publish_blip",
@@ -103,6 +137,16 @@ pub enum DaemonRequestPayload {
     ActivateWorkspace {
         workspace: String,
     },
+    CreateWorkspace {
+        name: String,
+        description: Option<String>,
+        color: Option<String>,
+        agent_access: bool,
+    },
+    SetAgentAccess {
+        workspace: String,
+        enabled: bool,
+    },
     SetStickyCapture {
         workspace: String,
         enabled: bool,
@@ -118,6 +162,10 @@ pub enum DaemonRequestPayload {
     ListBlips {
         workspace: String,
         limit: usize,
+        #[serde(default)]
+        offset: usize,
+        #[serde(default, skip_serializing_if = "BlipListFilters::is_default")]
+        filters: BlipListFilters,
     },
     SearchBlips {
         workspace: String,
@@ -147,6 +195,10 @@ pub enum DaemonRequestPayload {
     },
     RouteLatestInboxBlip {
         workspace: String,
+    },
+    RecopyBlip {
+        blip_id: String,
+        clipboard_fingerprint: String,
     },
     HostedStatus,
     HostedJoinWorkspace {
@@ -232,6 +284,8 @@ pub enum DaemonResponsePayload {
     Version(DaemonVersionResponse),
     CurrentWorkspace(CurrentWorkspaceResponse),
     WorkspaceActivated(CurrentWorkspaceResponse),
+    WorkspaceCreated(WorkspaceSummary),
+    AgentAccessSet(WorkspaceSummary),
     StickyCaptureSet(WorkspaceSummary),
     WorkspacePolicySet(WorkspaceSummary),
     Workspaces(WorkspaceListResponse),
@@ -243,6 +297,7 @@ pub enum DaemonResponsePayload {
     AgentBlips(AgentBlipListResponse),
     AgentBundle(AgentBundleResponse),
     BlipRouted(BlipRoutedResponse),
+    BlipRecopied(BlipRecopiedResponse),
     HostedStatus(HostedStatusResponse),
     HostedWorkspaceJoined(HostedStatusResponse),
     HostedBlipPublished(HostedPublishResponse),
@@ -310,11 +365,17 @@ pub struct HostedPublishResponse {
 pub struct BlipListResponse {
     pub workspace: String,
     pub blips: Vec<BlipSummary>,
+    #[serde(default)]
+    pub total: usize,
+    #[serde(default)]
+    pub filters_supported: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlipSummary {
     pub id: String,
+    #[serde(default)]
+    pub workspace: String,
     pub preview: String,
     pub size_bytes: i64,
     #[serde(default)]
@@ -442,6 +503,12 @@ pub struct BlipRoutedResponse {
     pub id: String,
     pub from_workspace: String,
     pub to_workspace: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlipRecopiedResponse {
+    pub id: String,
+    pub workspace: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -659,6 +726,166 @@ mod tests {
     }
 
     #[test]
+    fn set_agent_access_request_json_shape_round_trips() {
+        let request = DaemonRequest::new(
+            "request-agent-access",
+            DaemonCommand::SetAgentAccess,
+            DaemonRequestPayload::SetAgentAccess {
+                workspace: "auth-bug".to_owned(),
+                enabled: true,
+            },
+        );
+
+        let value = serde_json::to_value(&request).expect("agent access request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-agent-access",
+                "command": "set_agent_access",
+                "payload": {
+                    "set_agent_access": {
+                        "workspace": "auth-bug",
+                        "enabled": true,
+                    }
+                },
+            })
+        );
+
+        let decoded = serde_json::from_value::<DaemonRequest>(value)
+            .expect("agent access request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn create_workspace_request_json_shape_round_trips() {
+        let request = DaemonRequest::new(
+            "request-create-workspace",
+            DaemonCommand::CreateWorkspace,
+            DaemonRequestPayload::CreateWorkspace {
+                name: "release-notes".to_owned(),
+                description: None,
+                color: None,
+                agent_access: false,
+            },
+        );
+
+        let value =
+            serde_json::to_value(&request).expect("create workspace request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-create-workspace",
+                "command": "create_workspace",
+                "payload": {
+                    "create_workspace": {
+                        "name": "release-notes",
+                        "description": null,
+                        "color": null,
+                        "agent_access": false,
+                    }
+                },
+            })
+        );
+
+        let decoded = serde_json::from_value::<DaemonRequest>(value)
+            .expect("create workspace request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn list_blips_request_json_shape_round_trips_with_offset() {
+        let request = DaemonRequest::new(
+            "request-list-page",
+            DaemonCommand::ListBlips,
+            DaemonRequestPayload::ListBlips {
+                workspace: "inbox".to_owned(),
+                limit: 9,
+                offset: 8,
+                filters: BlipListFilters::default(),
+            },
+        );
+
+        let value = serde_json::to_value(&request).expect("list page request should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-list-page",
+                "command": "list_blips",
+                "payload": {
+                    "list_blips": {
+                        "workspace": "inbox",
+                        "limit": 9,
+                        "offset": 8,
+                    }
+                },
+            })
+        );
+
+        let decoded = serde_json::from_value::<DaemonRequest>(value)
+            .expect("list page request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn list_blips_request_json_shape_round_trips_with_filters() {
+        let request = DaemonRequest::new(
+            "request-list-filtered",
+            DaemonCommand::ListBlips,
+            DaemonRequestPayload::ListBlips {
+                workspace: "inbox".to_owned(),
+                limit: 8,
+                offset: 16,
+                filters: BlipListFilters {
+                    all_workspaces: true,
+                    created_at_from: Some(
+                        "2026-08-01T07:00:00Z"
+                            .parse()
+                            .expect("from timestamp should parse"),
+                    ),
+                    created_at_before: Some(
+                        "2026-08-08T07:00:00Z"
+                            .parse()
+                            .expect("before timestamp should parse"),
+                    ),
+                    blip_types: vec![BlipTypeFilter::Image, BlipTypeFilter::RichText],
+                },
+            },
+        );
+
+        let value = serde_json::to_value(&request).expect("filtered request should serialize");
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-list-filtered",
+                "command": "list_blips",
+                "payload": {
+                    "list_blips": {
+                        "workspace": "inbox",
+                        "limit": 8,
+                        "offset": 16,
+                        "filters": {
+                            "all_workspaces": true,
+                            "created_at_from": "2026-08-01T07:00:00Z",
+                            "created_at_before": "2026-08-08T07:00:00Z",
+                            "blip_types": ["image", "rich_text"],
+                        }
+                    }
+                },
+            })
+        );
+        let decoded =
+            serde_json::from_value::<DaemonRequest>(value).expect("filtered request should decode");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
     fn payload_preview_request_json_shape_round_trips() {
         let request = DaemonRequest::new(
             "request-preview",
@@ -768,6 +995,47 @@ mod tests {
 
         let decoded = serde_json::from_value::<DaemonResponse>(value)
             .expect("activate response should decode");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn agent_access_set_response_json_shape_round_trips() {
+        let response = DaemonResponse::ok(
+            "request-agent-access",
+            DaemonCommand::SetAgentAccess,
+            DaemonResponsePayload::AgentAccessSet(workspace_summary("auth-bug", true)),
+        );
+
+        let value =
+            serde_json::to_value(&response).expect("agent access response should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "api_version": 1,
+                "request_id": "request-agent-access",
+                "command": "set_agent_access",
+                "status": "ok",
+                "payload": {
+                    "agent_access_set": {
+                        "name": "auth-bug",
+                        "agent_access": true,
+                        "sticky_capture": false,
+                        "rich_capture_enabled": true,
+                        "image_capture_enabled": true,
+                        "rich_payload_visibility": "safe_preview",
+                        "agent_raw_payload_access": false,
+                        "hosted_share_enabled": false,
+                        "hosted_workspace_id": null,
+                        "hosted_workspace_name": null,
+                    }
+                },
+                "error": null,
+            })
+        );
+
+        let decoded = serde_json::from_value::<DaemonResponse>(value)
+            .expect("agent access response should decode");
         assert_eq!(decoded, response);
     }
 
@@ -1004,12 +1272,15 @@ mod tests {
                 workspace: "inbox".to_owned(),
                 blips: vec![BlipSummary {
                     id: "blip-1".to_owned(),
+                    workspace: "inbox".to_owned(),
                     preview: "api_key = abcdef1234567890".to_owned(),
                     size_bytes: 28,
                     is_redacted: false,
                     tags: vec!["secret".to_owned(), "secret:assignment".to_owned()],
                     payloads: Vec::new(),
                 }],
+                total: 1,
+                filters_supported: true,
             }),
         );
 
@@ -1027,12 +1298,15 @@ mod tests {
                         "workspace": "inbox",
                         "blips": [{
                             "id": "blip-1",
+                            "workspace": "inbox",
                             "preview": "api_key = abcdef1234567890",
                             "size_bytes": 28,
                             "is_redacted": false,
                             "tags": ["secret", "secret:assignment"],
                             "payloads": [],
                         }],
+                        "total": 1,
+                        "filters_supported": true,
                     }
                 },
                 "error": null,
@@ -1073,12 +1347,15 @@ mod tests {
                 workspace: "inbox".to_owned(),
                 blips: vec![BlipSummary {
                     id: "blip-1".to_owned(),
+                    workspace: String::new(),
                     preview: "copied text".to_owned(),
                     size_bytes: 11,
                     is_redacted: false,
                     tags: Vec::new(),
                     payloads: Vec::new(),
                 }],
+                total: 0,
+                filters_supported: false,
             }))
         );
     }
@@ -1303,5 +1580,20 @@ mod tests {
         "2026-06-21T12:34:56Z"
             .parse()
             .expect("fixed timestamp should parse")
+    }
+
+    fn workspace_summary(name: &str, agent_access: bool) -> WorkspaceSummary {
+        WorkspaceSummary {
+            name: name.to_owned(),
+            agent_access,
+            sticky_capture: false,
+            rich_capture_enabled: true,
+            image_capture_enabled: true,
+            rich_payload_visibility: "safe_preview".to_owned(),
+            agent_raw_payload_access: false,
+            hosted_share_enabled: false,
+            hosted_workspace_id: None,
+            hosted_workspace_name: None,
+        }
     }
 }

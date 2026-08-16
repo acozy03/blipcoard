@@ -152,6 +152,8 @@ impl DaemonClient {
             DaemonRequestPayload::ListBlips {
                 workspace: workspace.to_owned(),
                 limit,
+                offset: 0,
+                filters: blip_api::BlipListFilters::default(),
             },
         ))?;
 
@@ -608,6 +610,8 @@ fn payload_name(payload: Option<&DaemonResponsePayload>) -> &'static str {
         Some(DaemonResponsePayload::Version(_)) => "version",
         Some(DaemonResponsePayload::CurrentWorkspace(_)) => "current_workspace",
         Some(DaemonResponsePayload::WorkspaceActivated(_)) => "workspace_activated",
+        Some(DaemonResponsePayload::WorkspaceCreated(_)) => "workspace_created",
+        Some(DaemonResponsePayload::AgentAccessSet(_)) => "agent_access_set",
         Some(DaemonResponsePayload::StickyCaptureSet(_)) => "sticky_capture_set",
         Some(DaemonResponsePayload::WorkspacePolicySet(_)) => "workspace_policy_set",
         Some(DaemonResponsePayload::Workspaces(_)) => "workspaces",
@@ -619,6 +623,7 @@ fn payload_name(payload: Option<&DaemonResponsePayload>) -> &'static str {
         Some(DaemonResponsePayload::AgentBlips(_)) => "agent_blips",
         Some(DaemonResponsePayload::AgentBundle(_)) => "agent_bundle",
         Some(DaemonResponsePayload::BlipRouted(_)) => "blip_routed",
+        Some(DaemonResponsePayload::BlipRecopied(_)) => "blip_recopied",
         Some(DaemonResponsePayload::HostedStatus(_)) => "hosted_status",
         Some(DaemonResponsePayload::HostedWorkspaceJoined(_)) => "hosted_workspace_joined",
         Some(DaemonResponsePayload::HostedBlipPublished(_)) => "hosted_blip_published",
