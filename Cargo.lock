@@ -281,6 +281,7 @@ dependencies = [
  "chrono",
  "image",
  "serde_json",
+ "sha2",
  "thiserror",
 ]
 

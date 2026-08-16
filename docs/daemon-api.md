@@ -75,6 +75,27 @@ work and future desktop inspection:
 These commands should be added incrementally. A CLI command may keep using direct
 `blip-core` access only until the matching daemon command exists.
 
+### Filtered blip lists
+
+`list_blips` keeps `workspace`, `limit`, and `offset` for existing clients and
+accepts an optional `filters` object:
+
+- `all_workspaces`: include every local workspace instead of only `workspace`
+- `created_at_from`: inclusive UTC capture-time boundary
+- `created_at_before`: exclusive UTC capture-time boundary
+- `blip_types`: any combination of `text`, `image`, `file_list`, `rich_text`,
+  and `unknown`
+
+Omitting `filters` preserves workspace-scoped behavior. Filtering and the total
+count happen before `limit` and `offset`; aggregate results remain ordered by
+effective recency. Date boundaries use the original capture time, so recopying a
+blip can promote it without making an older capture qualify for a newer date
+range. List summaries include their owning `workspace`, which is required to
+identify rows in aggregate results.
+
+New daemons set `filters_supported = true` on `list_blips` responses so desktop
+clients fail clearly instead of presenting ignored filters during an upgrade.
+
 ## Policy-Sensitive Commands
 
 These operations must go through `blipd` once the daemon API exists:
@@ -153,16 +174,34 @@ Payload byte commands return typed errors for:
   for the requested operation.
 - `payload_too_large` when the daemon refuses an oversized export.
 
-Workspace policy changes use the daemon-mediated `set_workspace_policy` command,
-which records a `workspace_policy_changed` audit event and returns the updated
-workspace summary.
+Workspace creation uses the daemon-mediated `create_workspace` command and
+returns the created workspace summary. Duplicate names and invalid workspace
+input return `invalid_request`.
+
+Desktop recopy uses `recopy_blip` to promote an existing blip to the front of
+its workspace without changing its original capture timestamp. The command also
+registers a short-lived clipboard fingerprint so the matching clipboard watcher
+event is consumed instead of inserting a duplicate blip.
+
+Workspace policy changes use daemon-mediated commands that record a
+`workspace_policy_changed` audit event and return the updated workspace summary:
+
+- `set_agent_access` changes whether agent text reads are allowed for an
+  existing workspace.
+- `set_workspace_policy` changes rich capture, visibility, and raw payload
+  access settings.
+
+The desktop app requires confirmation before enabling agent access. Disabling
+access takes effect immediately. Changing `agent_access` does not change
+`agent_raw_payload_access`; raw binary payloads remain separately controlled and
+denied by default.
 
 Agent-facing reads are scoped by workspace. The current agent read command,
 `blip agent recent <workspace>`, is daemon-mediated and returns full blip
 content only when that workspace has `agent_access` enabled. The default `inbox`
 workspace is created with `agent_access = false`, so `blip agent recent inbox`
-returns an `access_denied` daemon error unless a future explicit policy change
-grants broader access. Raw binary payload reads require a separate workspace
+returns an `access_denied` daemon error until the user explicitly enables agent
+access. Raw binary payload reads require a separate workspace
 policy allow flag and are denied by default even when text agent access is
 enabled. Human-facing inbox commands remain separate from agent read commands.
 

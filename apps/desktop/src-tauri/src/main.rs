@@ -7,7 +7,11 @@ use blip_api::{
 };
 use blip_config::{BlipConfig, ConfigError};
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
@@ -85,8 +89,11 @@ fn main() {
             export_payload,
             list_audit_events,
             activate_workspace,
+            create_workspace,
+            set_agent_access,
             set_sticky_capture,
             route_latest_inbox_blip,
+            recopy_blip,
             hosted_status,
             hosted_join_workspace,
             hosted_publish_blip,
@@ -130,11 +137,18 @@ fn list_blips(
     app: tauri::AppHandle,
     workspace: String,
     limit: usize,
+    offset: usize,
+    filters: Option<blip_api::BlipListFilters>,
 ) -> Result<BlipListResponse, DesktopError> {
     daemon_payload(
         &app,
         DaemonCommand::ListBlips,
-        DaemonRequestPayload::ListBlips { workspace, limit },
+        DaemonRequestPayload::ListBlips {
+            workspace,
+            limit,
+            offset,
+            filters: filters.unwrap_or_default(),
+        },
         |payload| match payload {
             DaemonResponsePayload::Blips(response) => Some(response),
             _ => None,
@@ -251,6 +265,31 @@ fn activate_workspace(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+fn create_workspace(
+    app: tauri::AppHandle,
+    name: String,
+    description: Option<String>,
+    color: Option<String>,
+    agent_access: bool,
+) -> Result<WorkspaceSummary, DesktopError> {
+    daemon_payload(
+        &app,
+        DaemonCommand::CreateWorkspace,
+        DaemonRequestPayload::CreateWorkspace {
+            name,
+            description,
+            color,
+            agent_access,
+        },
+        |payload| match payload {
+            DaemonResponsePayload::WorkspaceCreated(response) => Some(response),
+            _ => None,
+        },
+        "workspace_created",
+    )
+}
+
+#[tauri::command(rename_all = "snake_case")]
 fn set_sticky_capture(
     app: tauri::AppHandle,
     workspace: String,
@@ -269,6 +308,24 @@ fn set_sticky_capture(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+fn set_agent_access(
+    app: tauri::AppHandle,
+    workspace: String,
+    enabled: bool,
+) -> Result<WorkspaceSummary, DesktopError> {
+    daemon_payload(
+        &app,
+        DaemonCommand::SetAgentAccess,
+        DaemonRequestPayload::SetAgentAccess { workspace, enabled },
+        |payload| match payload {
+            DaemonResponsePayload::AgentAccessSet(response) => Some(response),
+            _ => None,
+        },
+        "agent_access_set",
+    )
+}
+
+#[tauri::command(rename_all = "snake_case")]
 fn route_latest_inbox_blip(
     app: tauri::AppHandle,
     workspace: String,
@@ -282,6 +339,27 @@ fn route_latest_inbox_blip(
             _ => None,
         },
         "blip_routed",
+    )
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn recopy_blip(
+    app: tauri::AppHandle,
+    blip_id: String,
+    clipboard_fingerprint: String,
+) -> Result<blip_api::BlipRecopiedResponse, DesktopError> {
+    daemon_payload(
+        &app,
+        DaemonCommand::RecopyBlip,
+        DaemonRequestPayload::RecopyBlip {
+            blip_id,
+            clipboard_fingerprint,
+        },
+        |payload| match payload {
+            DaemonResponsePayload::BlipRecopied(response) => Some(response),
+            _ => None,
+        },
+        "blip_recopied",
     )
 }
 
@@ -432,12 +510,7 @@ fn send_daemon_request_impl(
 
     match send_once(&socket_path, &request) {
         Ok(response) => Ok(response),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            start_daemon_sidecar(app)?;
-            wait_for_daemon(&socket_path)?;
-            Ok(send_once(&socket_path, &request)?)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+        Err(error) if daemon_needs_start(&error, &socket_path) => {
             start_daemon_sidecar(app)?;
             wait_for_daemon(&socket_path)?;
             Ok(send_once(&socket_path, &request)?)
@@ -472,6 +545,14 @@ fn send_once(
 }
 
 #[cfg(unix)]
+fn daemon_needs_start(error: &std::io::Error, socket_path: &std::path::Path) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+    ) || fs::symlink_metadata(socket_path).is_ok_and(|metadata| !metadata.file_type().is_socket())
+}
+
+#[cfg(unix)]
 fn start_daemon_sidecar(app: &tauri::AppHandle) -> Result<(), DesktopError> {
     let sidecar = app
         .shell()
@@ -486,10 +567,13 @@ fn start_daemon_sidecar(app: &tauri::AppHandle) -> Result<(), DesktopError> {
 #[cfg(unix)]
 fn wait_for_daemon(socket_path: &std::path::Path) -> Result<(), DesktopError> {
     for _ in 0..DAEMON_STARTUP_ATTEMPTS {
-        if socket_path.exists() {
-            return Ok(());
+        match UnixStream::connect(socket_path) {
+            Ok(_) => return Ok(()),
+            Err(error) if daemon_needs_start(&error, socket_path) => {
+                std::thread::sleep(DAEMON_STARTUP_DELAY);
+            }
+            Err(error) => return Err(DesktopError::Ipc(error)),
         }
-        std::thread::sleep(DAEMON_STARTUP_DELAY);
     }
     Err(DesktopError::Ipc(std::io::Error::new(
         std::io::ErrorKind::TimedOut,

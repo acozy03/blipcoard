@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "blip-api"
-version = "0.1.0"
+version = "1.0.0-next.3"
 dependencies = [
  "chrono",
  "serde",
@@ -135,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "blip-config"
-version = "0.1.0"
+version = "1.0.0-next.3"
 dependencies = [
  "directories",
  "serde",

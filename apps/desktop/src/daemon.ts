@@ -2,11 +2,28 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 export type BlipSummary = {
   id: string;
+  workspace?: string;
   preview: string;
   size_bytes: number;
   is_redacted?: boolean;
   tags?: string[];
   payloads?: PayloadSummary[];
+};
+
+export type BlipTypeFilter = "text" | "image" | "file_list" | "rich_text" | "unknown";
+
+export type BlipListFilters = {
+  all_workspaces: boolean;
+  created_at_from: string | null;
+  created_at_before: string | null;
+  blip_types: BlipTypeFilter[];
+};
+
+export const DEFAULT_BLIP_LIST_FILTERS: BlipListFilters = {
+  all_workspaces: false,
+  created_at_from: null,
+  created_at_before: null,
+  blip_types: []
 };
 
 export type BlipDetail = {
@@ -77,6 +94,11 @@ export type BlipRoutedResponse = {
   to_workspace: string;
 };
 
+export type BlipRecopiedResponse = {
+  id: string;
+  workspace: string;
+};
+
 export type ShortcutRegistration = {
   id: string;
   label: string;
@@ -128,6 +150,8 @@ export type WorkspaceListResponse = {
 export type BlipListResponse = {
   workspace: string;
   blips: BlipSummary[];
+  total: number;
+  filters_supported?: boolean;
 };
 
 export type AuditEventListResponse = {
@@ -390,6 +414,8 @@ const DEV_DETAILS: Record<string, BlipDetail> = {
   }
 };
 
+const DEV_SORT_AT: Record<string, number> = {};
+
 const DEV_AUDIT_EVENTS: AuditEventSummary[] = [
   {
     id: "audit-dev-1",
@@ -453,21 +479,117 @@ export async function listWorkspaces(): Promise<WorkspaceListResponse> {
   }
 
   await devDelay();
-  return { workspaces: DEV_WORKSPACES };
+  return { workspaces: DEV_WORKSPACES.map((workspace) => ({ ...workspace })) };
+}
+
+export async function createWorkspace(input: {
+  name: string;
+  description?: string | null;
+  color?: string | null;
+  agent_access: boolean;
+}): Promise<WorkspaceSummary> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    return invoke<WorkspaceSummary>("create_workspace", input);
+  }
+
+  await devDelay();
+  if (DEV_WORKSPACES.some((workspace) => workspace.name === input.name)) {
+    throw new Error(`workspace \`${input.name}\` already exists`);
+  }
+
+  const workspace: WorkspaceSummary = {
+    name: input.name,
+    agent_access: input.agent_access,
+    sticky_capture: false,
+    rich_capture_enabled: true,
+    image_capture_enabled: true,
+    rich_payload_visibility: "safe_preview",
+    agent_raw_payload_access: false,
+    hosted_share_enabled: false,
+    hosted_workspace_id: null,
+    hosted_workspace_name: null
+  };
+  DEV_WORKSPACES.push(workspace);
+  DEV_BLIPS[input.name] = [];
+  return workspace;
 }
 
 export async function listWorkspaceBlips(
   workspace: string,
-  limit = 50
+  limit = 50,
+  offset = 0,
+  filters: BlipListFilters = DEFAULT_BLIP_LIST_FILTERS
 ): Promise<BlipListResponse> {
   const invoke = getInvoke();
 
   if (invoke) {
-    return invoke<BlipListResponse>("list_blips", { workspace, limit });
+    const response = await invoke<BlipListResponse>("list_blips", {
+      workspace,
+      limit,
+      offset,
+      filters
+    });
+    if (response.filters_supported !== true) {
+      throw new Error("The running blipd must be restarted to use blip filters");
+    }
+    return response;
   }
 
   await devDelay();
-  return { workspace, blips: DEV_BLIPS[workspace] ?? [] };
+  const blips = (filters.all_workspaces
+    ? Object.entries(DEV_BLIPS).flatMap(([workspaceName, workspaceBlips]) =>
+        workspaceBlips.map((blip) => ({ ...blip, workspace: workspaceName }))
+      )
+    : (DEV_BLIPS[workspace] ?? []).map((blip) => ({ ...blip, workspace })))
+    .filter((blip) => browserBlipMatchesFilters(blip, filters));
+  if (filters.all_workspaces) {
+    blips.sort((left, right) => browserBlipSortAt(right.id) - browserBlipSortAt(left.id));
+  }
+  return {
+    workspace,
+    blips: blips.slice(offset, offset + limit),
+    total: blips.length,
+    filters_supported: true
+  };
+}
+
+function browserBlipMatchesFilters(blip: BlipSummary, filters: BlipListFilters) {
+  const createdAt = browserBlipCreatedAt(blip.id);
+  if (filters.created_at_from && createdAt < Date.parse(filters.created_at_from)) {
+    return false;
+  }
+  if (filters.created_at_before && createdAt >= Date.parse(filters.created_at_before)) {
+    return false;
+  }
+  return filters.blip_types.length === 0 || filters.blip_types.includes(browserBlipType(blip));
+}
+
+function browserBlipCreatedAt(blipId: string) {
+  return Date.parse(DEV_DETAILS[blipId]?.created_at ?? "1970-01-01T00:00:00Z");
+}
+
+function browserBlipSortAt(blipId: string) {
+  return DEV_SORT_AT[blipId] ?? browserBlipCreatedAt(blipId);
+}
+
+function browserBlipType(blip: BlipSummary): BlipTypeFilter {
+  const primaryPayload =
+    blip.payloads?.find((payload) => payload.payload_kind !== "text") ?? blip.payloads?.[0];
+  switch (primaryPayload?.payload_kind) {
+    case "image":
+      return "image";
+    case "file_list":
+      return "file_list";
+    case "html":
+    case "rtf":
+      return "rich_text";
+    case "unknown":
+      return "unknown";
+    default:
+      return "text";
+  }
 }
 
 export async function getBlip(blipId: string): Promise<BlipDetail> {
@@ -577,6 +699,27 @@ export async function activateWorkspace(workspace: string): Promise<CurrentWorks
   return { active_workspace: workspace };
 }
 
+export async function setAgentAccess(
+  workspace: string,
+  enabled: boolean
+): Promise<WorkspaceSummary> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    return invoke<WorkspaceSummary>("set_agent_access", { workspace, enabled });
+  }
+
+  await devDelay();
+  const updated = DEV_WORKSPACES.find((devWorkspace) => devWorkspace.name === workspace);
+
+  if (!updated) {
+    throw new Error(`workspace \`${workspace}\` does not exist`);
+  }
+
+  updated.agent_access = enabled;
+  return updated;
+}
+
 export async function setStickyCapture(
   workspace: string,
   enabled: boolean
@@ -628,6 +771,36 @@ export async function routeLatestInboxBlip(workspace: string): Promise<BlipRoute
     from_workspace: "inbox",
     to_workspace: workspace
   };
+}
+
+export async function recopyBlip(
+  blipId: string,
+  clipboardFingerprint: string
+): Promise<BlipRecopiedResponse> {
+  const invoke = getInvoke();
+
+  if (invoke) {
+    return invoke<BlipRecopiedResponse>("recopy_blip", {
+      blip_id: blipId,
+      clipboard_fingerprint: clipboardFingerprint
+    });
+  }
+
+  await devDelay();
+  const detail = DEV_DETAILS[blipId];
+  if (!detail) {
+    throw new Error(`blip \`${blipId}\` does not exist`);
+  }
+  const workspaceBlips = DEV_BLIPS[detail.workspace] ?? [];
+  const index = workspaceBlips.findIndex((blip) => blip.id === blipId);
+  if (index >= 0) {
+    const [blip] = workspaceBlips.splice(index, 1);
+    if (blip) {
+      workspaceBlips.unshift(blip);
+    }
+  }
+  DEV_SORT_AT[blipId] = Date.now();
+  return { id: blipId, workspace: detail.workspace };
 }
 
 export async function hostedStatus(): Promise<HostedStatusResponse> {
