@@ -1,0 +1,161 @@
+<!doctype html><html lang=en dir=ltr class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-operations/upgrade-migrations" data-has-hydrated=false><head><meta charset=UTF-8><meta name=generator content="Docusaurus v3.10.1"><title data-rh=true>Upgrade and Migration Strategy | blipcoard</title><meta data-rh=true name=viewport content="width=device-width, initial-scale=1.0"/><meta data-rh=true name=twitter:card content=summary_large_image /><meta data-rh=true property=og:image content=https://blipcoard.github.io/blipcoard/img/blipcoard-removebg-preview.png /><meta data-rh=true name=twitter:image content=https://blipcoard.github.io/blipcoard/img/blipcoard-removebg-preview.png /><meta data-rh=true property=og:url content=https://blipcoard.github.io/blipcoard/docs/operations/upgrade-migrations /><meta data-rh=true property=og:locale content=en /><meta data-rh=true name=docusaurus_locale content=en /><meta data-rh=true name=docsearch:language content=en /><meta data-rh=true name=docusaurus_version content=current /><meta data-rh=true name=docusaurus_tag content=docs-default-current /><meta data-rh=true name=docsearch:version content=current /><meta data-rh=true name=docsearch:docusaurus_tag content=docs-default-current /><meta data-rh=true property=og:title content="Upgrade and Migration Strategy | blipcoard"/><meta data-rh=true name=description content="This guide defines how blipcoard upgrades should handle SQLite schema"/><meta data-rh=true property=og:description content="This guide defines how blipcoard upgrades should handle SQLite schema"/><link data-rh=true rel=icon href=/blipcoard/img/blipcoard-removebg-preview.png /><link data-rh=true rel=canonical href=https://blipcoard.github.io/blipcoard/docs/operations/upgrade-migrations /><link data-rh=true rel=alternate href=https://blipcoard.github.io/blipcoard/docs/operations/upgrade-migrations hreflang=en /><link data-rh=true rel=alternate href=https://blipcoard.github.io/blipcoard/docs/operations/upgrade-migrations hreflang=x-default /><script data-rh=true type=application/ld+json>{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","item":"https://blipcoard.github.io/blipcoard/docs/operations/upgrade-migrations","name":"Upgrade and Migration Strategy","position":1}]}</script><link rel=stylesheet href=/blipcoard/assets/css/styles.7de2108a.css /><script src=/blipcoard/assets/js/runtime~main.08eeb46e.js defer></script><script src=/blipcoard/assets/js/main.0ef016eb.js defer></script></head><body><svg style="display: none;"><defs>
+<symbol id=theme-svg-external-link viewBox="0 0 24 24"><path fill=currentColor d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme-0ca")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{for(var[t,e]of new URLSearchParams(window.location.search).entries())if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id=__docusaurus><link rel=preload as=image href=/blipcoard/img/blipcoard-logo.png /><div role=region aria-label="Skip to main content"><a class=skipToContent_fXgn href=#__docusaurus_skipToContent_fallback>Skip to main content</a></div><nav aria-label=Main class="theme-layout-navbar navbar navbar--fixed-top"><div class=navbar__inner><div class="theme-layout-navbar-left navbar__items"><button aria-label="Toggle navigation bar" aria-expanded=false class="navbar__toggle clean-btn" type=button><svg width=30 height=30 viewBox="0 0 30 30" aria-hidden=true><path stroke=currentColor stroke-linecap=round stroke-miterlimit=10 stroke-width=2 d="M4 7h22M4 15h22M4 23h22"/></svg></button><a class=navbar__brand href=/blipcoard/><div class=navbar__logo><img src=/blipcoard/img/blipcoard-logo.png alt="blipcoard logo" class="themedComponent_mlkZ themedComponent--light_NVdE"/><img src=/blipcoard/img/blipcoard-logo.png alt="blipcoard logo" class="themedComponent_mlkZ themedComponent--dark_xIcU"/></div></a></div><div class="theme-layout-navbar-right navbar__items navbar__items--right"><div class=navbar__item><a class="navbar__item navbar__link blip-github-link" href=https://github.com/blipcoard/blipcoard target=_blank rel="noopener noreferrer" aria-label="GitHub repository"></a></div><div class="toggle_vylO colorModeToggle_DEke"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type=button disabled title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width=24 height=24 aria-hidden=true class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill=currentColor d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"/></svg><svg viewBox="0 0 24 24" width=24 height=24 aria-hidden=true class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill=currentColor d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"/></svg><svg viewBox="0 0 24 24" width=24 height=24 aria-hidden=true class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill=currentColor d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"/></svg></button></div><div class=navbarSearchContainer_Bca1><div class="navbar__search searchBarContainer_NW3z" dir=ltr><input placeholder=Search aria-label=Search class="navbar__search-input searchInput_YFbd" value="" /><div class="loadingRing_RJI3 searchBarLoadingRing_YnHq"><div></div><div></div><div></div><div></div></div></div></div></div></div><div role=presentation class=navbar-sidebar__backdrop></div></nav><div id=__docusaurus_skipToContent_fallback class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class=docsWrapper_hBAB><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type=button></button><div class=docRoot_UBD9><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class=sidebarViewport_aRkj><div class=sidebar_njMd><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role=button aria-expanded=false href=/blipcoard/docs/start/overview><span title=Start class=categoryLinkLabel_W154>Start</span></a></div><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role=button aria-expanded=false href=/blipcoard/docs/operations/cli-operations><span title=Product class=categoryLinkLabel_W154>Product</span></a></div><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role=button aria-expanded=false href=/blipcoard/docs/architecture/runtime-boundary><span title=Architecture class=categoryLinkLabel_W154>Architecture</span></a></div><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role=button aria-expanded=true href=/blipcoard/docs/operations/upgrade-migrations><span title=Operations class=categoryLinkLabel_W154>Operations</span></a></div><ul class=menu__list><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link menu__link--active" aria-current=page tabindex=0 href=/blipcoard/docs/operations/upgrade-migrations><span title="Upgrade and Migration Strategy" class=linkLabel_WmDU>Upgrade and Migration Strategy</span></a><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class=menu__link tabindex=0 href=/blipcoard/docs/operations/cli-operations><span title="CLI Install and Operations" class=linkLabel_WmDU>CLI Install and Operations</span></a><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class=menu__link tabindex=0 href=/blipcoard/docs/operations/desktop-bundles><span title="Desktop Bundle Notes" class=linkLabel_WmDU>Desktop Bundle Notes</span></a><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class=menu__link tabindex=0 href=/blipcoard/docs/operations/hosted-deployment><span title="Hosted Deployment And Operations" class=linkLabel_WmDU>Hosted Deployment And Operations</span></a><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class=menu__link tabindex=0 href=/blipcoard/docs/operations/release-automation><span title="Release Automation" class=linkLabel_WmDU>Release Automation</span></a></ul><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role=button aria-expanded=false href=/blipcoard/docs/reference/cli><span title=Reference class=categoryLinkLabel_W154>Reference</span></a></div><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role=button aria-expanded=false href=/blipcoard/docs/contributor/development-workflow><span title=Contributor class=categoryLinkLabel_W154>Contributor</span></a></div><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role=button aria-expanded=false href=/blipcoard/docs/roadmap/phase-model><span title=Roadmap class=categoryLinkLabel_W154>Roadmap</span></a></div></ul></nav></div></div></aside><main class=docMainContainer_TBSr><div class="container padding-top--md padding-bottom--lg"><div class=row><div class="col docItemCol_VOVn"><div class=docItemContainer_Djhp><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label=Breadcrumbs><ul class=breadcrumbs><li class=breadcrumbs__item><a aria-label="Home page" class=breadcrumbs__link href=/blipcoard/><svg viewBox="0 0 24 24" class=breadcrumbHomeIcon_YNFT><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill=currentColor /></svg></a><li class=breadcrumbs__item><span class=breadcrumbs__link>Operations</span><li class="breadcrumbs__item breadcrumbs__item--active"><span class=breadcrumbs__link>Upgrade and Migration Strategy</span></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type=button class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>Upgrade and Migration Strategy</h1></header>
+<p>This guide defines how <code>blipcoard</code> upgrades should handle SQLite schema
+migrations, daemon/API compatibility, and rich payload blob storage.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=upgrade-model>Upgrade Model<a href=#upgrade-model class=hash-link aria-label="Direct link to Upgrade Model" title="Direct link to Upgrade Model" translate=no>​</a></h2>
+<p>Upgrade <code>blipcoard</code> as one local runtime:</p>
+<ul>
+<li class=""><code>blipd</code></li>
+<li class=""><code>blip</code></li>
+<li class=""><code>blipcoard</code> desktop app</li>
+</ul>
+<p>Install matching binaries from the same release. The CLI and desktop app are
+daemon clients; they should not be upgraded independently from <code>blipd</code> for
+normal use.</p>
+<p>Recommended upgrade sequence:</p>
+<ol>
+<li class="">Stop the daemon with <code>blip service stop</code> or stop the foreground <code>blipd</code>
+process.</li>
+<li class="">Back up config, SQLite, SQLite sidecar files, and <code>blobs/</code>.</li>
+<li class="">Replace all installed binaries from the same release.</li>
+<li class="">Start the daemon with <code>blip service start</code> or foreground <code>blipd</code>.</li>
+<li class="">Run <code>blip service status</code> and <code>blip health</code>.</li>
+<li class="">Smoke-test list/search/routing and at least one rich payload preview/export
+if the store contains rich payloads.</li>
+</ol>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=migration-timing>Migration Timing<a href=#migration-timing class=hash-link aria-label="Direct link to Migration Timing" title="Direct link to Migration Timing" translate=no>​</a></h2>
+<p>SQLite migrations run when a process opens the store through <code>BlipStore::open()</code>.
+The normal upgrade path is daemon startup:</p>
+<ol>
+<li class=""><code>blipd</code> loads or creates config.</li>
+<li class=""><code>blipd</code> opens the configured SQLite database.</li>
+<li class=""><code>BlipStore::open()</code> applies pending numbered migrations inside an immediate
+SQLite transaction.</li>
+<li class="">The store initializes the default <code>inbox</code> and active workspace if needed.</li>
+<li class="">The daemon starts serving IPC and clipboard ingestion.</li>
+</ol>
+<p><code>blip service install</code> only writes service manager files. It does not migrate
+the database by itself. The first post-upgrade daemon start performs migration.</p>
+<p>Some bootstrap or admin CLI paths currently open the store directly while the
+daemon API is incomplete. Those paths also run pending migrations because they
+use <code>BlipStore::open()</code>. Release tests should therefore verify both daemon
+startup and any direct-store admin path that remains supported.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=sqlite-schema-rules>SQLite Schema Rules<a href=#sqlite-schema-rules class=hash-link aria-label="Direct link to SQLite Schema Rules" title="Direct link to SQLite Schema Rules" translate=no>​</a></h2>
+<p>Schema changes are numbered migrations in <code>crates/blip-core/src/sql/</code> and are
+registered in <code>crates/blip-core/src/store.rs</code>.</p>
+<p>Rules for new migrations:</p>
+<ul>
+<li class="">Add a new SQL file with the next sequential number.</li>
+<li class="">Register it in <code>MIGRATIONS</code>.</li>
+<li class="">Increase <code>SCHEMA_VERSION</code>.</li>
+<li class="">Keep migration SQL idempotent where practical, but rely on <code>PRAGMA user_version</code> for normal one-time execution.</li>
+<li class="">Add a migration test that starts from the previous relevant schema version and
+verifies the resulting data shape.</li>
+<li class="">Treat migration failures as startup failures. Do not continue daemon startup
+against a partially upgraded or unknown store.</li>
+</ul>
+<p>The migration runner updates <code>PRAGMA user_version</code> after each migration
+succeeds. Store initialization also records the current schema version in
+<code>app_state</code>.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=backup-requirements>Backup Requirements<a href=#backup-requirements class=hash-link aria-label="Direct link to Backup Requirements" title="Direct link to Backup Requirements" translate=no>​</a></h2>
+<p>Back up SQLite and blobs together before upgrades that can affect schema,
+payload metadata, retention, or blob references.</p>
+<p>Include:</p>
+<ul>
+<li class=""><code>config.toml</code></li>
+<li class=""><code>blipcoard.db</code></li>
+<li class="">SQLite sidecar files such as <code>blipcoard.db-wal</code> and <code>blipcoard.db-shm</code> when
+present</li>
+<li class=""><code>blobs/</code></li>
+</ul>
+<p>Simple file-copy backup:</p>
+<div class="language-sh codeBlockContainer_Ckt0 theme-code-block" style=--prism-color:#393A34;--prism-background-color:#f6f8fa><div class=codeBlockContent_QJqH><pre tabindex=0 class="prism-code language-sh codeBlock_bY9V thin-scrollbar" style=color:#393A34;background-color:#f6f8fa><code class=codeBlockLines_e6Vv><div class=token-line style=color:#393A34><span class="token plain">blip </span><span class="token function" style=color:#d73a49>service</span><span class="token plain"> stop</span><br/></div><div class=token-line style=color:#393A34><span class="token plain"></span><span class="token comment" style=color:#999988;font-style:italic># copy config.toml, blipcoard.db*, and blobs/</span><span class="token plain"></span><br/></div><div class=token-line style=color:#393A34><span class="token plain">blip </span><span class="token function" style=color:#d73a49>service</span><span class="token plain"> start</span><br/></div></code></pre></div></div>
+<p>The blob directory is part of the store. SQLite contains payload metadata and
+blob references; <code>blobs/</code> contains the bytes. Restoring only SQLite can leave
+payload rows with missing blobs. Restoring only <code>blobs/</code> can leave orphan files
+that clients cannot see.</p>
+<p>Before destructive migrations, release notes must explicitly recommend a full
+backup. Destructive means any migration that drops columns/tables, rewrites blob
+references, deletes payload metadata, changes retention behavior, or cannot be
+reversed by simply reinstalling the older binary.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=rollback-expectations>Rollback Expectations<a href=#rollback-expectations class=hash-link aria-label="Direct link to Rollback Expectations" title="Direct link to Rollback Expectations" translate=no>​</a></h2>
+<p>Rollback is not guaranteed after a migration has run.</p>
+<p>Supported rollback expectation:</p>
+<ul>
+<li class="">If the new daemon has not started and no migration has run, reinstall the
+previous matching binaries.</li>
+<li class="">If a migration has run, restore the full pre-upgrade backup before running old
+binaries.</li>
+</ul>
+<p>Not rollback-safe:</p>
+<ul>
+<li class="">Running older binaries against a database with a newer <code>PRAGMA user_version</code>.</li>
+<li class="">Restoring SQLite without matching <code>blobs/</code>.</li>
+<li class="">Restoring <code>blobs/</code> without matching SQLite metadata.</li>
+<li class="">Downgrading after retention cleanup or blob garbage collection has deleted
+data.</li>
+<li class="">Downgrading after a migration rewrites payload metadata or blob references.</li>
+</ul>
+<p>The product should prefer clear startup or client errors over best-effort
+downgrade behavior.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=daemonapi-compatibility>Daemon/API Compatibility<a href=#daemonapi-compatibility class=hash-link aria-label="Direct link to Daemon/API Compatibility" title="Direct link to Daemon/API Compatibility" translate=no>​</a></h2>
+<p>The daemon API version lives in <code>blip-api</code> as <code>DAEMON_API_VERSION</code>. Clients send
+their expected API version with each daemon request. The daemon rejects
+unsupported request versions with a typed daemon error. The CLI also checks the
+response API version and reports:</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style=--prism-color:#393A34;--prism-background-color:#f6f8fa><div class=codeBlockContent_QJqH><pre tabindex=0 class="prism-code language-text codeBlock_bY9V thin-scrollbar" style=color:#393A34;background-color:#f6f8fa><code class=codeBlockLines_e6Vv><div class=token-line style=color:#393A34><span class="token plain">daemon API version mismatch: response used &lt;actual>, expected &lt;expected></span><br/></div></code></pre></div></div>
+<p>Action for users:</p>
+<ol>
+<li class="">Install matching <code>blip</code>, <code>blipd</code>, and desktop binaries from the same release.</li>
+<li class="">Restart the daemon.</li>
+<li class="">Re-run <code>blip health</code> or <code>blip service status</code>.</li>
+</ol>
+<p>Desktop builds should bundle matching <code>blipd</code> and <code>blip</code> sidecars. CLI-only
+packages should install matching <code>blip</code> and <code>blipd</code> binaries together. Mixed
+versions are not a supported steady state.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=rich-payload-storage>Rich Payload Storage<a href=#rich-payload-storage class=hash-link aria-label="Direct link to Rich Payload Storage" title="Direct link to Rich Payload Storage" translate=no>​</a></h2>
+<p>Rich payload upgrades must account for both metadata and bytes:</p>
+<ul>
+<li class="">Text-compatible payload metadata lives in SQLite.</li>
+<li class="">Binary payload bytes and generated previews live under <code>blobs/</code>.</li>
+<li class="">Payload summaries can report missing blob states; missing blobs are not
+expected to panic clients.</li>
+<li class="">Garbage collection removes only unreferenced blobs.</li>
+</ul>
+<p>Migration tests for rich payload changes should include:</p>
+<ul>
+<li class="">SQLite-only restore with missing blobs.</li>
+<li class="">Blob-only restore with no SQLite references.</li>
+<li class="">Complete restore with SQLite plus <code>blobs/</code>.</li>
+<li class="">Preview blob references as well as raw payload blob references.</li>
+<li class="">Retention cleanup after migration.</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=release-migration-checklist>Release Migration Checklist<a href=#release-migration-checklist class=hash-link aria-label="Direct link to Release Migration Checklist" title="Direct link to Release Migration Checklist" translate=no>​</a></h2>
+<p>For every release that changes schema, payload metadata, blob layout, daemon API,
+or service startup:</p>
+<ul>
+<li class="">Build previous supported release binaries.</li>
+<li class="">Create a fixture store with plain text blips, rich text payloads, image
+payloads, file-list metadata, agent-readable and human-only workspaces, and at
+least one redacted/secret-like blip.</li>
+<li class="">Back up <code>config.toml</code>, <code>blipcoard.db*</code>, and <code>blobs/</code>.</li>
+<li class="">Upgrade to the candidate release.</li>
+<li class="">Start <code>blipd</code> and confirm migrations complete.</li>
+<li class="">Verify <code>PRAGMA user_version</code> and <code>app_state.schema_version</code>.</li>
+<li class="">Run <code>blip health</code>, <code>blip service status</code>, <code>blip workspaces</code>, <code>blip inbox</code>,
+<code>blip search</code>, <code>blip payload inspect</code>, <code>blip payload preview</code>, and <code>blip payload export</code>.</li>
+<li class="">Verify CLI and desktop clients can talk to the upgraded daemon without API
+mismatch errors.</li>
+<li class="">Verify an intentionally mismatched older client reports an actionable API
+mismatch error.</li>
+<li class="">Verify missing-blob and orphan-blob scenarios remain inspectable and
+garbage-collectable.</li>
+<li class="">Restore the pre-upgrade backup and confirm the previous supported release
+still works against the restored store.</li>
+<li class="">Record the migration source version, target version, platform, and result in
+release notes.</li>
+</ul>
+<p>For releases without schema or daemon API changes, still smoke-test <code>blip health</code>, <code>blip service status</code>, and a basic list/search flow after replacing the
+binaries.</div><footer class="theme-doc-footer docusaurus-mt-lg"><div class="row margin-top--sm theme-doc-footer-edit-meta-row"><div class="col noPrint_WFHX"><a href=https://github.com/blipcoard/blipcoard/tree/develop/site/docs/operations/upgrade-migrations.md target=_blank rel="noopener noreferrer" class=theme-edit-this-page><svg fill=currentColor height=20 width=20 viewBox="0 0 40 40" class=iconEdit_Z9Sw aria-hidden=true><g><path d="m34.5 11.7l-3 3.1-6.3-6.3 3.1-3q0.5-0.5 1.2-0.5t1.1 0.5l3.9 3.9q0.5 0.4 0.5 1.1t-0.5 1.2z m-29.5 17.1l18.4-18.5 6.3 6.3-18.4 18.4h-6.3v-6.2z"/></g></svg>Edit this page</a></div><div class="col lastUpdated_JAkA"></div></div></footer></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href=/blipcoard/docs/architecture/adr/typed-clipboard-payloads><div class=pagination-nav__sublabel>Previous</div><div class=pagination-nav__label>ADR 0001: Typed Clipboard Payloads</div></a><a class="pagination-nav__link pagination-nav__link--next" href=/blipcoard/docs/operations/cli-operations><div class=pagination-nav__sublabel>Next</div><div class=pagination-nav__label>CLI Install and Operations</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href=#upgrade-model class="table-of-contents__link toc-highlight">Upgrade Model</a><li><a href=#migration-timing class="table-of-contents__link toc-highlight">Migration Timing</a><li><a href=#sqlite-schema-rules class="table-of-contents__link toc-highlight">SQLite Schema Rules</a><li><a href=#backup-requirements class="table-of-contents__link toc-highlight">Backup Requirements</a><li><a href=#rollback-expectations class="table-of-contents__link toc-highlight">Rollback Expectations</a><li><a href=#daemonapi-compatibility class="table-of-contents__link toc-highlight">Daemon/API Compatibility</a><li><a href=#rich-payload-storage class="table-of-contents__link toc-highlight">Rich Payload Storage</a><li><a href=#release-migration-checklist class="table-of-contents__link toc-highlight">Release Migration Checklist</a></ul></div></div></div></div></main></div></div></div></div></body>

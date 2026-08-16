@@ -1,0 +1,228 @@
+<!doctype html><html lang=en dir=ltr class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-architecture/hosted-threat-model" data-has-hydrated=false><head><meta charset=UTF-8><meta name=generator content="Docusaurus v3.10.1"><title data-rh=true>Hosted Workspace Threat Model | blipcoard</title><meta data-rh=true name=viewport content="width=device-width, initial-scale=1.0"/><meta data-rh=true name=twitter:card content=summary_large_image /><meta data-rh=true property=og:image content=https://blipcoard.github.io/blipcoard/img/blipcoard-removebg-preview.png /><meta data-rh=true name=twitter:image content=https://blipcoard.github.io/blipcoard/img/blipcoard-removebg-preview.png /><meta data-rh=true property=og:url content=https://blipcoard.github.io/blipcoard/docs/architecture/hosted-threat-model /><meta data-rh=true property=og:locale content=en /><meta data-rh=true name=docusaurus_locale content=en /><meta data-rh=true name=docsearch:language content=en /><meta data-rh=true name=docusaurus_version content=current /><meta data-rh=true name=docusaurus_tag content=docs-default-current /><meta data-rh=true name=docsearch:version content=current /><meta data-rh=true name=docsearch:docusaurus_tag content=docs-default-current /><meta data-rh=true property=og:title content="Hosted Workspace Threat Model | blipcoard"/><meta data-rh=true name=description content="Hosted workspaces move selected clipboard data from one local machine to a"/><meta data-rh=true property=og:description content="Hosted workspaces move selected clipboard data from one local machine to a"/><link data-rh=true rel=icon href=/blipcoard/img/blipcoard-removebg-preview.png /><link data-rh=true rel=canonical href=https://blipcoard.github.io/blipcoard/docs/architecture/hosted-threat-model /><link data-rh=true rel=alternate href=https://blipcoard.github.io/blipcoard/docs/architecture/hosted-threat-model hreflang=en /><link data-rh=true rel=alternate href=https://blipcoard.github.io/blipcoard/docs/architecture/hosted-threat-model hreflang=x-default /><script data-rh=true type=application/ld+json>{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","item":"https://blipcoard.github.io/blipcoard/docs/architecture/hosted-threat-model","name":"Hosted Workspace Threat Model","position":1}]}</script><link rel=stylesheet href=/blipcoard/assets/css/styles.7de2108a.css /><script src=/blipcoard/assets/js/runtime~main.08eeb46e.js defer></script><script src=/blipcoard/assets/js/main.0ef016eb.js defer></script></head><body><svg style="display: none;"><defs>
+<symbol id=theme-svg-external-link viewBox="0 0 24 24"><path fill=currentColor d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme-0ca")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{for(var[t,e]of new URLSearchParams(window.location.search).entries())if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id=__docusaurus><link rel=preload as=image href=/blipcoard/img/blipcoard-logo.png /><div role=region aria-label="Skip to main content"><a class=skipToContent_fXgn href=#__docusaurus_skipToContent_fallback>Skip to main content</a></div><nav aria-label=Main class="theme-layout-navbar navbar navbar--fixed-top"><div class=navbar__inner><div class="theme-layout-navbar-left navbar__items"><button aria-label="Toggle navigation bar" aria-expanded=false class="navbar__toggle clean-btn" type=button><svg width=30 height=30 viewBox="0 0 30 30" aria-hidden=true><path stroke=currentColor stroke-linecap=round stroke-miterlimit=10 stroke-width=2 d="M4 7h22M4 15h22M4 23h22"/></svg></button><a class=navbar__brand href=/blipcoard/><div class=navbar__logo><img src=/blipcoard/img/blipcoard-logo.png alt="blipcoard logo" class="themedComponent_mlkZ themedComponent--light_NVdE"/><img src=/blipcoard/img/blipcoard-logo.png alt="blipcoard logo" class="themedComponent_mlkZ themedComponent--dark_xIcU"/></div></a></div><div class="theme-layout-navbar-right navbar__items navbar__items--right"><div class=navbar__item><a class="navbar__item navbar__link blip-github-link" href=https://github.com/blipcoard/blipcoard target=_blank rel="noopener noreferrer" aria-label="GitHub repository"></a></div><div class="toggle_vylO colorModeToggle_DEke"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type=button disabled title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width=24 height=24 aria-hidden=true class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill=currentColor d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"/></svg><svg viewBox="0 0 24 24" width=24 height=24 aria-hidden=true class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill=currentColor d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"/></svg><svg viewBox="0 0 24 24" width=24 height=24 aria-hidden=true class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill=currentColor d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"/></svg></button></div><div class=navbarSearchContainer_Bca1><div class="navbar__search searchBarContainer_NW3z" dir=ltr><input placeholder=Search aria-label=Search class="navbar__search-input searchInput_YFbd" value="" /><div class="loadingRing_RJI3 searchBarLoadingRing_YnHq"><div></div><div></div><div></div><div></div></div></div></div></div></div><div role=presentation class=navbar-sidebar__backdrop></div></nav><div id=__docusaurus_skipToContent_fallback class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class=docsWrapper_hBAB><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type=button></button><div class=docRoot_UBD9><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class=sidebarViewport_aRkj><div class=sidebar_njMd><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role=button aria-expanded=false href=/blipcoard/docs/start/overview><span title=Start class=categoryLinkLabel_W154>Start</span></a></div><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role=button aria-expanded=false href=/blipcoard/docs/operations/cli-operations><span title=Product class=categoryLinkLabel_W154>Product</span></a></div><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role=button aria-expanded=true href=/blipcoard/docs/architecture/runtime-boundary><span title=Architecture class=categoryLinkLabel_W154>Architecture</span></a></div><ul class=menu__list><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class=menu__link tabindex=0 href=/blipcoard/docs/architecture/runtime-boundary><span title="Runtime Boundary" class=linkLabel_WmDU>Runtime Boundary</span></a><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class=menu__link tabindex=0 href=/blipcoard/docs/architecture/runtime-model><span title="blipcoard Architecture" class=linkLabel_WmDU>blipcoard Architecture</span></a><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class=menu__link tabindex=0 href=/blipcoard/docs/architecture/privacy-and-policy><span title="Privacy And Workspace Policy" class=linkLabel_WmDU>Privacy And Workspace Policy</span></a><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class=menu__link tabindex=0 href=/blipcoard/docs/architecture/hosted-workspaces><span title="Hosted Workspace Architecture" class=linkLabel_WmDU>Hosted Workspace Architecture</span></a><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link menu__link--active" aria-current=page tabindex=0 href=/blipcoard/docs/architecture/hosted-threat-model><span title="Hosted Workspace Threat Model" class=linkLabel_WmDU>Hosted Workspace Threat Model</span></a><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class=menu__link tabindex=0 href=/blipcoard/docs/architecture/hosted-sync-protocol><span title="Hosted Sync Protocol" class=linkLabel_WmDU>Hosted Sync Protocol</span></a><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class=menu__link tabindex=0 href=/blipcoard/docs/architecture/storage-and-blobs><span title="Rich Payload Reliability Manual Checks" class=linkLabel_WmDU>Rich Payload Reliability Manual Checks</span></a><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role=button aria-expanded=false tabindex=0 href=/blipcoard/docs/architecture/adr/typed-clipboard-payloads><span title=ADRs class=categoryLinkLabel_W154>ADRs</span></a></div></ul><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role=button aria-expanded=false href=/blipcoard/docs/operations/upgrade-migrations><span title=Operations class=categoryLinkLabel_W154>Operations</span></a></div><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role=button aria-expanded=false href=/blipcoard/docs/reference/cli><span title=Reference class=categoryLinkLabel_W154>Reference</span></a></div><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role=button aria-expanded=false href=/blipcoard/docs/contributor/development-workflow><span title=Contributor class=categoryLinkLabel_W154>Contributor</span></a></div><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class=menu__list-item-collapsible><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role=button aria-expanded=false href=/blipcoard/docs/roadmap/phase-model><span title=Roadmap class=categoryLinkLabel_W154>Roadmap</span></a></div></ul></nav></div></div></aside><main class=docMainContainer_TBSr><div class="container padding-top--md padding-bottom--lg"><div class=row><div class="col docItemCol_VOVn"><div class=docItemContainer_Djhp><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label=Breadcrumbs><ul class=breadcrumbs><li class=breadcrumbs__item><a aria-label="Home page" class=breadcrumbs__link href=/blipcoard/><svg viewBox="0 0 24 24" class=breadcrumbHomeIcon_YNFT><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill=currentColor /></svg></a><li class=breadcrumbs__item><span class=breadcrumbs__link>Architecture</span><li class="breadcrumbs__item breadcrumbs__item--active"><span class=breadcrumbs__link>Hosted Workspace Threat Model</span></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type=button class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>Hosted Workspace Threat Model</h1></header>
+<p>Hosted workspaces move selected clipboard data from one local machine to a
+shared service. That changes the privacy boundary and must be explicit in the
+product, protocol, and UI.</p>
+<p>The MVP remains self-hostable and Tailscale-friendly. A team can run the hosted
+service on infrastructure it controls and expose it over a private network. A
+managed relay can be added later, but it is not required for Phase 11.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=security-choice-for-mvp>Security Choice For MVP<a href=#security-choice-for-mvp class=hash-link aria-label="Direct link to Security Choice For MVP" title="Direct link to Security Choice For MVP" translate=no>​</a></h2>
+<p>Use a server-readable MVP with strong transport, storage, access, audit, and
+retention controls.</p>
+<p>This means:</p>
+<ul>
+<li class="">the hosted service can read hosted workspace metadata and published blip
+content</li>
+<li class="">clients must use HTTPS or a private network transport such as Tailscale</li>
+<li class="">service storage must be encrypted at rest by the database and object storage
+layer</li>
+<li class="">the service must enforce workspace membership, roles, retention, deletion, and
+audit policy</li>
+<li class="">users must be told that published blips are readable by the workspace service
+operator</li>
+</ul>
+<p>End-to-end encryption is a future design path, not an MVP promise. Do not build
+API or storage assumptions that make E2EE impossible later: keep payload
+envelopes versioned, separate metadata from content bytes, and avoid requiring
+server-side content inspection for core sync correctness.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=assets>Assets<a href=#assets class=hash-link aria-label="Direct link to Assets" title="Direct link to Assets" translate=no>​</a></h2>
+<p>Sensitive assets include:</p>
+<ul>
+<li class="">secrets copied to the clipboard, such as tokens, API keys, cookies, SSH keys,
+one-time codes, and passwords</li>
+<li class="">screenshots containing credentials, customer data, private chats, production
+dashboards, or source code</li>
+<li class="">copied source code, logs, stack traces, database rows, and customer records</li>
+<li class="">file-list payloads that reveal local paths, project names, usernames, or
+mounted volumes</li>
+<li class="">rich text and HTML that may contain hidden content, links, or formatting from
+private tools</li>
+<li class="">membership lists, device names, IP addresses, join-code activity, and audit
+events</li>
+<li class="">retention and deletion state</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=trust-boundaries>Trust Boundaries<a href=#trust-boundaries class=hash-link aria-label="Direct link to Trust Boundaries" title="Direct link to Trust Boundaries" translate=no>​</a></h2>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style=--prism-color:#393A34;--prism-background-color:#f6f8fa><div class=codeBlockContent_QJqH><pre tabindex=0 class="prism-code language-text codeBlock_bY9V thin-scrollbar" style=color:#393A34;background-color:#f6f8fa><code class=codeBlockLines_e6Vv><div class=token-line style=color:#393A34><span class="token plain">local OS clipboard</span><br/></div><div class=token-line style=color:#393A34><span class="token plain">  -> blipd local capture and policy boundary</span><br/></div><div class=token-line style=color:#393A34><span class="token plain">  -> explicit publish or hosted sticky-share boundary</span><br/></div><div class=token-line style=color:#393A34><span class="token plain">  -> hosted service API</span><br/></div><div class=token-line style=color:#393A34><span class="token plain">  -> hosted store and real-time sync</span><br/></div><div class=token-line style=color:#393A34><span class="token plain">  -> other members' clients</span><br/></div></code></pre></div></div>
+<p>Primary trust boundaries:</p>
+<ul>
+<li class="">local machine to hosted service</li>
+<li class="">member device to membership/session state</li>
+<li class="">join code to persistent membership</li>
+<li class="">hosted metadata to raw payload bytes</li>
+<li class="">service operator to workspace content</li>
+<li class="">web client to browser storage</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=threats-and-required-controls>Threats And Required Controls<a href=#threats-and-required-controls class=hash-link aria-label="Direct link to Threats And Required Controls" title="Direct link to Threats And Required Controls" translate=no>​</a></h2>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id=accidental-over-sharing>Accidental Over-Sharing<a href=#accidental-over-sharing class=hash-link aria-label="Direct link to Accidental Over-Sharing" title="Direct link to Accidental Over-Sharing" translate=no>​</a></h3>
+<p>Risk:</p>
+<ul>
+<li class="">a user copies sensitive material and unknowingly publishes it</li>
+<li class="">hosted sticky share remains enabled longer than intended</li>
+<li class="">local <code>inbox</code> is treated as shareable by default</li>
+</ul>
+<p>Controls:</p>
+<ul>
+<li class="">explicit publish is the default hosted sharing mode</li>
+<li class="">hosted sticky share is opt-in, workspace-scoped, visible, and reversible</li>
+<li class=""><code>inbox</code> remains human-only and local by default</li>
+<li class="">desktop and CLI must show the destination hosted workspace before publishing</li>
+<li class="">local audit events record hosted publish attempts and outcomes</li>
+<li class="">redacted local blips require an explicit confirmation or policy grant before
+hosted publish</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id=unauthorized-workspace-access>Unauthorized Workspace Access<a href=#unauthorized-workspace-access class=hash-link aria-label="Direct link to Unauthorized Workspace Access" title="Direct link to Unauthorized Workspace Access" translate=no>​</a></h3>
+<p>Risk:</p>
+<ul>
+<li class="">a non-member reads hosted blips</li>
+<li class="">a viewer performs editor actions</li>
+<li class="">a removed member keeps using an old session</li>
+</ul>
+<p>Controls:</p>
+<ul>
+<li class="">every hosted API request checks membership and role</li>
+<li class="">roles start with <code>owner</code>, <code>editor</code>, and <code>viewer</code></li>
+<li class="">session tokens are scoped to a member and device</li>
+<li class="">member removal revokes active sessions for that workspace</li>
+<li class="">real-time channels re-check access on connect and reconnect</li>
+<li class="">audit events record joins, role changes, removals, and denied access</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id=join-code-abuse>Join-Code Abuse<a href=#join-code-abuse class=hash-link aria-label="Direct link to Join-Code Abuse" title="Direct link to Join-Code Abuse" translate=no>​</a></h3>
+<p>Risk:</p>
+<ul>
+<li class="">codes are guessed, leaked, reused, or treated as permanent credentials</li>
+</ul>
+<p>Controls:</p>
+<ul>
+<li class="">join codes are high-entropy temporary invites</li>
+<li class="">codes expire by default</li>
+<li class="">owners can revoke and rotate codes</li>
+<li class="">invalid-code attempts are rate-limited by source and workspace</li>
+<li class="">successful redemption creates persistent membership; the code is not the
+continuing credential</li>
+<li class="">code creation, redemption, expiry, revocation, and failed attempts are audited</li>
+<li class="">anonymous public joins are out of scope for the MVP</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id=service-or-operator-exposure>Service Or Operator Exposure<a href=#service-or-operator-exposure class=hash-link aria-label="Direct link to Service Or Operator Exposure" title="Direct link to Service Or Operator Exposure" translate=no>​</a></h3>
+<p>Risk:</p>
+<ul>
+<li class="">the hosted service operator can read workspace content in the server-readable
+MVP</li>
+<li class="">logs or errors leak content</li>
+<li class="">backups retain deleted material longer than expected</li>
+</ul>
+<p>Controls:</p>
+<ul>
+<li class="">document that MVP hosted content is server-readable</li>
+<li class="">encrypt database and object storage at rest</li>
+<li class="">never log raw blip content, payload bytes, join codes, or session tokens</li>
+<li class="">redact sensitive request fields in structured logs</li>
+<li class="">keep backups encrypted</li>
+<li class="">define backup retention and deletion delay clearly</li>
+<li class="">provide an E2EE-compatible envelope path for later phases</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id=rich-payload-abuse>Rich Payload Abuse<a href=#rich-payload-abuse class=hash-link aria-label="Direct link to Rich Payload Abuse" title="Direct link to Rich Payload Abuse" translate=no>​</a></h3>
+<p>Risk:</p>
+<ul>
+<li class="">large images or files create cost and availability problems</li>
+<li class="">copied HTML is rendered unsafely</li>
+<li class="">file-list payloads trick users into exposing local files</li>
+</ul>
+<p>Controls:</p>
+<ul>
+<li class="">hosted payload size limits are mandatory</li>
+<li class="">raw rich payload upload is explicit and can be disabled per workspace</li>
+<li class="">HTML and RTF are stored as data and rendered through sanitized fallback only</li>
+<li class="">file-list payloads publish metadata by default, not file bytes</li>
+<li class="">raw exports and copies are role-checked and audited</li>
+<li class="">unsupported payloads remain visible as metadata instead of being silently
+downgraded</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id=sync-integrity>Sync Integrity<a href=#sync-integrity class=hash-link aria-label="Direct link to Sync Integrity" title="Direct link to Sync Integrity" translate=no>​</a></h3>
+<p>Risk:</p>
+<ul>
+<li class="">duplicate publish attempts create confusing records</li>
+<li class="">reconnects replay old events out of order</li>
+<li class="">clients accept forged updates</li>
+</ul>
+<p>Controls:</p>
+<ul>
+<li class="">publish requests use idempotency keys derived from local blip id, workspace,
+device, and attempt id</li>
+<li class="">hosted events are append-only with monotonically increasing workspace sequence
+numbers</li>
+<li class="">clients resume from the last acknowledged sequence</li>
+<li class="">clients reject events for the wrong workspace or membership</li>
+<li class="">service timestamps do not replace local capture timestamps</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id=abuse-and-availability>Abuse And Availability<a href=#abuse-and-availability class=hash-link aria-label="Direct link to Abuse And Availability" title="Direct link to Abuse And Availability" translate=no>​</a></h3>
+<p>Risk:</p>
+<ul>
+<li class="">join-code brute force, payload spam, excessive sync connections, or oversized
+uploads degrade the service</li>
+</ul>
+<p>Controls:</p>
+<ul>
+<li class="">rate-limit join attempts, login/session creation, publish, export, and
+real-time connections</li>
+<li class="">enforce payload and workspace quotas</li>
+<li class="">expose admin/operator metrics for rejected joins, denied reads, upload size,
+sync lag, and error rates</li>
+<li class="">provide workspace-level disable or quarantine controls before managed hosting</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=privacy-policy-defaults>Privacy Policy Defaults<a href=#privacy-policy-defaults class=hash-link aria-label="Direct link to Privacy Policy Defaults" title="Direct link to Privacy Policy Defaults" translate=no>​</a></h2>
+<p>Hosted privacy defaults:</p>
+<ul>
+<li class="">local clipboard capture is not uploaded automatically</li>
+<li class="">explicit publish is the default share action</li>
+<li class="">hosted sticky share is off by default</li>
+<li class="">workspace membership is required for every hosted read</li>
+<li class="">viewer role cannot publish, delete, or change tags unless explicitly allowed</li>
+<li class="">raw payload export is audited</li>
+<li class="">retention defaults should be short and visible until users configure them</li>
+<li class="">deletion removes hosted metadata and blob references, with backup purge timing
+documented separately</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=deletion-export-and-retention>Deletion, Export, And Retention<a href=#deletion-export-and-retention class=hash-link aria-label="Direct link to Deletion, Export, And Retention" title="Direct link to Deletion, Export, And Retention" translate=no>​</a></h2>
+<p>Hosted workspaces need clear lifecycle rules:</p>
+<ul>
+<li class="">owners can delete hosted workspaces</li>
+<li class="">editors can delete blips only if workspace policy allows it</li>
+<li class="">delete operations create audit events</li>
+<li class="">deleting a blip removes metadata and schedules blob deletion</li>
+<li class="">retention jobs remove expired hosted blips and unreferenced blobs</li>
+<li class="">exports are role-checked and audited</li>
+<li class="">backup retention may delay physical purge; that delay must be documented</li>
+</ul>
+<p>Local deletion and hosted deletion are separate. If a user deletes a local blip
+after publishing it, the hosted copy remains until the hosted workspace policy or
+an explicit hosted delete removes it.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=implementation-requirements>Implementation Requirements<a href=#implementation-requirements class=hash-link aria-label="Direct link to Implementation Requirements" title="Direct link to Implementation Requirements" translate=no>​</a></h2>
+<p>Before hosted launch, implementation issues must include:</p>
+<ul>
+<li class="">membership roles and per-request authorization</li>
+<li class="">join-code entropy, expiry, revocation, and rate limiting</li>
+<li class="">local and hosted audit event types for publish, join, read/export, delete, and
+denied access</li>
+<li class="">explicit hosted publish and visible sticky-share controls in desktop and CLI</li>
+<li class="">hosted payload size limits and workspace quotas</li>
+<li class="">structured logging that redacts content, codes, and tokens</li>
+<li class="">encrypted-at-rest database and blob storage configuration</li>
+<li class="">retention jobs and deletion semantics</li>
+<li class="">idempotent publish and ordered sync events</li>
+<li class="">an E2EE migration note in API and storage design</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id=non-goals>Non-Goals<a href=#non-goals class=hash-link aria-label="Direct link to Non-Goals" title="Direct link to Non-Goals" translate=no>​</a></h2>
+<p>Phase 11 MVP does not promise:</p>
+<ul>
+<li class="">end-to-end encryption</li>
+<li class="">anonymous public workspaces</li>
+<li class="">automatic upload of every clipboard event</li>
+<li class="">cloud-side clipboard watching</li>
+<li class="">unmanaged public internet exposure</li>
+<li class="">unlimited payload size or unlimited retention</li>
+<li class="">permanent bearer-token join codes</li>
+</ul>
+<p>These are deliberate limits. Hosted sharing should be useful without weakening
+the local privacy model that makes <code>blipcoard</code> safe for agent workflows.</div><footer class="theme-doc-footer docusaurus-mt-lg"><div class="row margin-top--sm theme-doc-footer-edit-meta-row"><div class="col noPrint_WFHX"><a href=https://github.com/blipcoard/blipcoard/tree/develop/site/docs/architecture/hosted-threat-model.md target=_blank rel="noopener noreferrer" class=theme-edit-this-page><svg fill=currentColor height=20 width=20 viewBox="0 0 40 40" class=iconEdit_Z9Sw aria-hidden=true><g><path d="m34.5 11.7l-3 3.1-6.3-6.3 3.1-3q0.5-0.5 1.2-0.5t1.1 0.5l3.9 3.9q0.5 0.4 0.5 1.1t-0.5 1.2z m-29.5 17.1l18.4-18.5 6.3 6.3-18.4 18.4h-6.3v-6.2z"/></g></svg>Edit this page</a></div><div class="col lastUpdated_JAkA"></div></div></footer></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href=/blipcoard/docs/architecture/hosted-workspaces><div class=pagination-nav__sublabel>Previous</div><div class=pagination-nav__label>Hosted Workspace Architecture</div></a><a class="pagination-nav__link pagination-nav__link--next" href=/blipcoard/docs/architecture/hosted-sync-protocol><div class=pagination-nav__sublabel>Next</div><div class=pagination-nav__label>Hosted Sync Protocol</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href=#security-choice-for-mvp class="table-of-contents__link toc-highlight">Security Choice For MVP</a><li><a href=#assets class="table-of-contents__link toc-highlight">Assets</a><li><a href=#trust-boundaries class="table-of-contents__link toc-highlight">Trust Boundaries</a><li><a href=#threats-and-required-controls class="table-of-contents__link toc-highlight">Threats And Required Controls</a><ul><li><a href=#accidental-over-sharing class="table-of-contents__link toc-highlight">Accidental Over-Sharing</a><li><a href=#unauthorized-workspace-access class="table-of-contents__link toc-highlight">Unauthorized Workspace Access</a><li><a href=#join-code-abuse class="table-of-contents__link toc-highlight">Join-Code Abuse</a><li><a href=#service-or-operator-exposure class="table-of-contents__link toc-highlight">Service Or Operator Exposure</a><li><a href=#rich-payload-abuse class="table-of-contents__link toc-highlight">Rich Payload Abuse</a><li><a href=#sync-integrity class="table-of-contents__link toc-highlight">Sync Integrity</a><li><a href=#abuse-and-availability class="table-of-contents__link toc-highlight">Abuse And Availability</a></ul><li><a href=#privacy-policy-defaults class="table-of-contents__link toc-highlight">Privacy Policy Defaults</a><li><a href=#deletion-export-and-retention class="table-of-contents__link toc-highlight">Deletion, Export, And Retention</a><li><a href=#implementation-requirements class="table-of-contents__link toc-highlight">Implementation Requirements</a><li><a href=#non-goals class="table-of-contents__link toc-highlight">Non-Goals</a></ul></div></div></div></div></main></div></div></div></div></body>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="blipcoard">
+  <rect width="64" height="64" rx="14" fill="#f7f9fb"/>
+  <path d="M24 20h14v14H24zM18 40h12v12H18zM42 36h10v10H42z" fill="#146382"/>
+  <path d="M31 34v8h-7M38 27h9v9" fill="none" stroke="#146382" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
